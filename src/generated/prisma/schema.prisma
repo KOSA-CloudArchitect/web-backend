@@ -1,0 +1,268 @@
+// Prisma schema for HighPipe - Kubernetes 기반 데이터 파이프라인 자동화
+// 리뷰 기반 실시간 감정 분석 및 요약 서비스
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 사용자 인증 및 권한 관리
+model User {
+  id                  String    @id @default(cuid())
+  email               String    @unique
+  password            String
+  role                String    @default("user") // 'user', 'admin'
+  isActive            Boolean   @default(true) @map("is_active")
+  emailVerified       Boolean   @default(false) @map("email_verified")
+  lastLoginAt         DateTime? @map("last_login_at")
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime? @map("locked_until")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  profile          UserProfile?
+  sessions         UserSession[]
+  searchHistory    SearchHistory[]
+  analysisRequests AnalysisRequest[]
+  watchList        WatchList[]
+
+  @@index([email])
+  @@index([role])
+  @@index([isActive])
+  @@map("users")
+}
+
+// 사용자 프로필 (확장 정보)
+model UserProfile {
+  id                      String   @id @default(cuid())
+  userId                  String   @unique @map("user_id")
+  firstName               String?  @map("first_name")
+  lastName                String?  @map("last_name")
+  phone                   String?
+  avatarUrl               String?  @map("avatar_url")
+  timezone                String   @default("Asia/Seoul")
+  language                String   @default("ko")
+  notificationPreferences Json     @default("{\"email\": true, \"push\": true, \"priceAlert\": true}") @map("notification_preferences") @db.JsonB
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+// 사용자 세션 (JWT refresh token 관리)
+model UserSession {
+  id               String   @id @default(cuid())
+  userId           String   @map("user_id")
+  refreshTokenHash String   @map("refresh_token_hash")
+  deviceInfo       Json?    @map("device_info") @db.JsonB
+  ipAddress        String?  @map("ip_address")
+  userAgent        String?  @map("user_agent")
+  expiresAt        DateTime @map("expires_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  lastUsedAt       DateTime @default(now()) @map("last_used_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([refreshTokenHash])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+// 상품 카테고리
+model Category {
+  id        String   @id @default(cuid())
+  name      String
+  parentId  String?  @map("parent_id")
+  path      String // 계층 구조 경로 (예: "가전 > 휴대폰 > 스마트폰")
+  level     Int      @default(0) // 카테고리 깊이
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryHierarchy")
+  products Product[]
+
+  @@index([parentId])
+  @@index([level])
+  @@map("categories")
+}
+
+// 상품 정보
+model Product {
+  id            String    @id @default(cuid())
+  name          String
+  url           String    @unique // 쿠팡 상품 URL
+  categoryId    String?   @map("category_id")
+  currentPrice  Decimal?  @map("current_price") @db.Decimal(10, 2)
+  averageRating Float?    @map("average_rating")
+  totalReviews  Int       @default(0) @map("total_reviews")
+  imageUrl      String?   @map("image_url")
+  isActive      Boolean   @default(true) @map("is_active")
+  lastCrawledAt DateTime? @map("last_crawled_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  category         Category?         @relation(fields: [categoryId], references: [id])
+  analysisResults  AnalysisResult[]
+  analysisRequests AnalysisRequest[]
+  watchList        WatchList[]
+  priceHistory     PriceHistory[]
+
+  @@index([url])
+  @@index([categoryId])
+  @@index([isActive])
+  @@index([lastCrawledAt])
+  @@map("products")
+}
+
+// 가격 변동 이력
+model PriceHistory {
+  id        String   @id @default(cuid())
+  productId String   @map("product_id")
+  price     Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, createdAt])
+  @@map("price_history")
+}
+
+// 분석 요청 기록
+model AnalysisRequest {
+  id          String    @id @default(cuid())
+  userId      String?   @map("user_id") // null이면 익명 요청
+  productId   String    @map("product_id")
+  taskId      String    @unique @map("task_id") // Kafka 메시지 추적용
+  status      String    @default("pending") // 'pending', 'processing', 'completed', 'failed'
+  progress    Int       @default(0)
+  requestType String    @map("request_type") // 'realtime', 'scheduled'
+  priority    Int       @default(5) // 1(높음) ~ 10(낮음)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  completedAt DateTime? @map("completed_at")
+
+  // Relations
+  user    User?   @relation(fields: [userId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([userId])
+  @@index([productId])
+  @@index([taskId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("analysis_requests")
+}
+
+// 분석 결과
+model AnalysisResult {
+  id                 String   @id @default(cuid())
+  productId          String   @map("product_id")
+  taskId             String   @unique @map("task_id")
+  status             String   @default("processing") // 'processing', 'completed', 'failed'
+  sentimentPositive  Float?   @map("sentiment_positive")
+  sentimentNegative  Float?   @map("sentiment_negative")
+  sentimentNeutral   Float?   @map("sentiment_neutral")
+  summary            String?
+  keywords           Json?    @db.JsonB
+  totalReviews       Int      @default(0) @map("total_reviews")
+  averageRating      Float?   @map("average_rating")
+  ratingDistribution Json?    @map("rating_distribution") @db.JsonB // 별점 분포
+  errorMessage       String?  @map("error_message")
+  processingTime     Int?     @map("processing_time") // 처리 시간 (초)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  product        Product   @relation(fields: [productId], references: [id])
+  keywordEntries Keyword[]
+
+  @@index([productId])
+  @@index([taskId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("analysis_results")
+}
+
+// 키워드 분석 결과
+model Keyword {
+  id               String   @id @default(cuid())
+  analysisResultId String   @map("analysis_result_id")
+  keyword          String
+  sentiment        String // 'positive', 'negative', 'neutral'
+  frequency        Int
+  confidence       Float
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  // Relations
+  analysisResult AnalysisResult @relation(fields: [analysisResultId], references: [id], onDelete: Cascade)
+
+  @@index([analysisResultId])
+  @@index([keyword])
+  @@index([sentiment])
+  @@map("keywords")
+}
+
+// 검색 기록
+model SearchHistory {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  query       String
+  resultCount Int      @default(0) @map("result_count")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([query])
+  @@map("search_history")
+}
+
+// 관심 상품 (관심 상품 관리)
+model WatchList {
+  id                String    @id @default(cuid())
+  userId            String    @map("user_id")
+  productId         String    @map("product_id")
+  priceAlert        Boolean   @default(true) @map("price_alert") // 가격 알림 설정
+  targetPrice       Decimal?  @map("target_price") @db.Decimal(10, 2) // 목표 가격
+  lastNotifiedAt    DateTime? @map("last_notified_at")
+  analysisFrequency String    @default("daily") @map("analysis_frequency") // 'daily', 'weekly', 'monthly'
+  isActive          Boolean   @default(true) @map("is_active")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+  @@index([userId])
+  @@index([productId])
+  @@index([isActive])
+  @@map("watch_list")
+}
+
+// 시스템 설정 (캐시, 설정값 등)
+model SystemConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json     @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_config")
+}

@@ -1,0 +1,190 @@
+// PostgreSQL 전용 Prisma 스키마
+// 관계형 데이터만 포함
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/postgresql-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("POSTGRESQL_DATABASE_URL")
+}
+
+// 사용자 관리
+model User {
+  id                    String    @id @default(cuid())
+  email                 String    @unique
+  password              String
+  role                  String    @default("user")
+  isActive              Boolean   @default(true) @map("is_active")
+  emailVerified         Boolean   @default(false) @map("email_verified")
+  lastLoginAt           DateTime? @map("last_login_at")
+  failedLoginAttempts   Int       @default(0) @map("failed_login_attempts")
+  lockedUntil           DateTime? @map("locked_until")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  profile               UserProfile?
+  searchHistory         SearchHistory[]
+  analysisRequests      AnalysisRequest[]
+  watchList             WatchList[]
+
+  @@map("users")
+}
+
+model UserProfile {
+  id                      String   @id @default(cuid())
+  userId                  String   @unique @map("user_id")
+  firstName               String?  @map("first_name")
+  lastName                String?  @map("last_name")
+  phone                   String?
+  avatarUrl               String?  @map("avatar_url")
+  timezone                String   @default("Asia/Seoul")
+  language                String   @default("ko")
+  notificationPreferences Json     @default("{\"email\": true, \"push\": true, \"priceAlert\": true}") @map("notification_preferences") @db.JsonB
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+// 상품 마스터
+model Category {
+  id        String     @id @default(cuid())
+  name      String
+  parentId  String?    @map("parent_id")
+  path      String
+  level     Int        @default(0)
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  parent    Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children  Category[] @relation("CategoryHierarchy")
+  products  Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id            String   @id @default(cuid())
+  name          String
+  url           String   @unique
+  categoryId    String?  @map("category_id")
+  currentPrice  Decimal? @map("current_price") @db.Decimal(10, 2)
+  averageRating Float?   @map("average_rating")
+  totalReviews  Int      @default(0) @map("total_reviews")
+  imageUrl      String?  @map("image_url")
+  isActive      Boolean  @default(true) @map("is_active")
+  lastCrawledAt DateTime? @map("last_crawled_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  category         Category?         @relation(fields: [categoryId], references: [id])
+  analysisResults  AnalysisResult[]
+  analysisRequests AnalysisRequest[]
+  watchList        WatchList[]
+  priceHistory     PriceHistory[]
+
+  @@map("products")
+}
+
+// 관심 상품
+model WatchList {
+  id                String    @id @default(cuid())
+  userId            String    @map("user_id")
+  productId         String    @map("product_id")
+  priceAlert        Boolean   @default(true) @map("price_alert")
+  targetPrice       Decimal?  @map("target_price") @db.Decimal(10, 2)
+  lastNotifiedAt    DateTime? @map("last_notified_at")
+  analysisFrequency String    @default("daily") @map("analysis_frequency")
+  isActive          Boolean   @default(true) @map("is_active")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product           Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+  @@map("watch_list")
+}
+
+// 분석 요청 추적
+model AnalysisRequest {
+  id          String    @id @default(cuid())
+  userId      String?   @map("user_id")
+  productId   String    @map("product_id")
+  taskId      String    @unique @map("task_id")
+  status      String    @default("pending")
+  progress    Int       @default(0)
+  requestType String    @map("request_type")
+  priority    Int       @default(5)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  completedAt DateTime? @map("completed_at")
+
+  user        User?     @relation(fields: [userId], references: [id])
+  product     Product   @relation(fields: [productId], references: [id])
+
+  @@map("analysis_requests")
+}
+
+// 최종 분석 결과
+model AnalysisResult {
+  id               String   @id @default(cuid())
+  productId        String   @map("product_id")
+  taskId           String   @unique @map("task_id")
+  status           String   @default("completed")
+  sentimentPositive Float?   @map("sentiment_positive")
+  sentimentNegative Float?   @map("sentiment_negative")
+  sentimentNeutral Float?   @map("sentiment_neutral")
+  summary          String?
+  finalKeywords    Json?    @map("final_keywords") @db.JsonB
+  totalReviews     Int      @default(0) @map("total_reviews")
+  averageRating    Float?   @map("average_rating")
+  ratingDistribution Json?  @map("rating_distribution") @db.JsonB
+  errorMessage     String?  @map("error_message")
+  processingTime   Int?     @map("processing_time")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  product          Product  @relation(fields: [productId], references: [id])
+
+  @@map("analysis_results")
+}
+
+// 기타
+model PriceHistory {
+  id        String   @id @default(cuid())
+  productId String   @map("product_id")
+  price     Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("price_history")
+}
+
+model SearchHistory {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  query     String
+  resultCount Int    @default(0) @map("result_count")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("search_history")
+}
+
+model SystemConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json     @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_config")
+}

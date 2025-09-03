@@ -1,0 +1,1467 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "KOSA Review Analysis API",
+    "version": "1.0.0",
+    "description": "리뷰 기반 실시간 감정 분석 및 요약 서비스 API",
+    "contact": {
+      "name": "KOSA Team",
+      "email": "support@kosa.com"
+    },
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3001",
+      "description": "Development server"
+    },
+    {
+      "url": "https://api.kosa.com",
+      "description": "Production server"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT 토큰을 사용한 인증"
+      }
+    },
+    "schemas": {
+      "User": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "사용자 고유 ID"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "description": "사용자 이메일"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 6,
+            "description": "사용자 비밀번호 (최소 6자)"
+          },
+          "name": {
+            "type": "string",
+            "description": "사용자 이름"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "계정 생성일"
+          }
+        }
+      },
+      "Product": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "상품 고유 ID"
+          },
+          "name": {
+            "type": "string",
+            "description": "상품명"
+          },
+          "price": {
+            "type": "number",
+            "description": "상품 가격"
+          },
+          "rating": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 5,
+            "description": "평균 별점 (0-5)"
+          },
+          "reviewCount": {
+            "type": "integer",
+            "description": "총 리뷰 수"
+          },
+          "imageUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "상품 이미지 URL"
+          },
+          "category": {
+            "type": "string",
+            "description": "상품 카테고리"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "상품 페이지 URL"
+          }
+        }
+      },
+      "AnalysisRequest": {
+        "type": "object",
+        "required": [
+          "productId"
+        ],
+        "properties": {
+          "productId": {
+            "type": "string",
+            "description": "분석할 상품 ID"
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "maxReviews": {
+                "type": "integer",
+                "default": 100,
+                "description": "분석할 최대 리뷰 수"
+              },
+              "includeKeywords": {
+                "type": "boolean",
+                "default": true,
+                "description": "키워드 분석 포함 여부"
+              }
+            }
+          }
+        }
+      },
+      "AnalysisResult": {
+        "type": "object",
+        "properties": {
+          "productId": {
+            "type": "string",
+            "description": "분석된 상품 ID"
+          },
+          "sentiment": {
+            "type": "object",
+            "properties": {
+              "positive": {
+                "type": "number",
+                "description": "긍정 감정 비율 (0-1)"
+              },
+              "negative": {
+                "type": "number",
+                "description": "부정 감정 비율 (0-1)"
+              },
+              "neutral": {
+                "type": "number",
+                "description": "중립 감정 비율 (0-1)"
+              }
+            }
+          },
+          "keywords": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "word": {
+                  "type": "string",
+                  "description": "키워드"
+                },
+                "frequency": {
+                  "type": "integer",
+                  "description": "언급 빈도"
+                },
+                "sentiment": {
+                  "type": "string",
+                  "enum": [
+                    "positive",
+                    "negative",
+                    "neutral"
+                  ],
+                  "description": "키워드 감정"
+                }
+              }
+            }
+          },
+          "summary": {
+            "type": "string",
+            "description": "리뷰 요약"
+          },
+          "totalReviews": {
+            "type": "integer",
+            "description": "분석된 총 리뷰 수"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "분석 완료 시간"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "에러 메시지"
+          },
+          "code": {
+            "type": "string",
+            "description": "에러 코드"
+          },
+          "details": {
+            "type": "object",
+            "description": "에러 상세 정보"
+          }
+        }
+      },
+      "AuthResponse": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "JWT 액세스 토큰"
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "JWT 리프레시 토큰"
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/analyze": {
+      "post": {
+        "summary": "리뷰 분석 요청",
+        "description": "특정 상품에 대한 리뷰 분석을 시작합니다.",
+        "tags": [
+          "Analysis"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalysisRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "분석 요청 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "분석이 시작되었습니다."
+                    },
+                    "taskId": {
+                      "type": "string",
+                      "description": "분석 작업 ID"
+                    },
+                    "estimatedTime": {
+                      "type": "integer",
+                      "description": "예상 완료 시간 (초)"
+                    },
+                    "fromCache": {
+                      "type": "boolean",
+                      "description": "캐시된 결과인지 여부"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "잘못된 요청",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 오류",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/analyze/status/{productId}": {
+      "get": {
+        "summary": "분석 상태 확인",
+        "description": "특정 상품의 분석 진행 상태를 확인합니다.",
+        "tags": [
+          "Analysis"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "productId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "상품 ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "분석 상태 조회 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "processing",
+                        "completed",
+                        "failed"
+                      ],
+                      "description": "분석 상태"
+                    },
+                    "progress": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 100,
+                      "description": "진행률 (%)"
+                    },
+                    "estimatedTime": {
+                      "type": "integer",
+                      "description": "예상 완료 시간 (초)"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "오류 메시지 (실패 시)"
+                    },
+                    "fromCache": {
+                      "type": "boolean",
+                      "description": "캐시된 결과인지 여부"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "분석 정보를 찾을 수 없음",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 오류"
+          }
+        }
+      }
+    },
+    "/api/analyze/result/{productId}": {
+      "get": {
+        "summary": "분석 결과 조회",
+        "description": "완료된 분석의 결과를 조회합니다.",
+        "tags": [
+          "Analysis"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "productId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "상품 ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "분석 결과 조회 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "status": {
+                      "type": "string",
+                      "example": "completed"
+                    },
+                    "result": {
+                      "$ref": "#/components/schemas/AnalysisResult"
+                    },
+                    "fromCache": {
+                      "type": "boolean",
+                      "description": "캐시된 결과인지 여부"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "분석 정보를 찾을 수 없음",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 오류"
+          }
+        }
+      }
+    },
+    "/api/info": {
+      "get": {
+        "summary": "API 기본 정보 조회",
+        "description": "API의 기본 정보와 현재 버전을 조회합니다.",
+        "tags": [
+          "API Info"
+        ],
+        "responses": {
+          "200": {
+            "description": "API 정보 조회 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "example": "KOSA Review Analysis API"
+                    },
+                    "description": {
+                      "type": "string",
+                      "example": "리뷰 기반 실시간 감정 분석 및 요약 서비스 API"
+                    },
+                    "currentVersion": {
+                      "type": "string",
+                      "example": "v1"
+                    },
+                    "latestVersion": {
+                      "type": "string",
+                      "example": "1.0.0"
+                    },
+                    "documentation": {
+                      "type": "string",
+                      "example": "/api-docs"
+                    },
+                    "status": {
+                      "type": "string",
+                      "example": "stable"
+                    },
+                    "uptime": {
+                      "type": "string",
+                      "description": "서버 가동 시간"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/info/versions": {
+      "get": {
+        "summary": "지원되는 API 버전 목록 조회",
+        "description": "현재 지원되는 모든 API 버전의 정보를 조회합니다.",
+        "tags": [
+          "API Info"
+        ],
+        "responses": {
+          "200": {
+            "description": "API 버전 목록 조회 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "versions": {
+                      "type": "object",
+                      "description": "버전별 상세 정보"
+                    },
+                    "latest": {
+                      "type": "string",
+                      "description": "최신 버전"
+                    },
+                    "supported": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "지원되는 버전 목록"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/info/changelog": {
+      "get": {
+        "summary": "API 변경 이력 조회",
+        "description": "API의 버전별 변경 이력을 조회합니다.",
+        "tags": [
+          "API Info"
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "type": "string"
+            },
+            "description": "시작 버전 (예: 1.0.0)"
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "schema": {
+              "type": "string"
+            },
+            "description": "종료 버전 (예: 1.1.0)"
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "default": 10
+            },
+            "description": "조회할 최대 항목 수"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "변경 이력 조회 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "changelog": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "version": {
+                            "type": "string"
+                          },
+                          "date": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "major",
+                              "minor",
+                              "patch"
+                            ]
+                          },
+                          "changes": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "added",
+                                    "changed",
+                                    "deprecated",
+                                    "removed",
+                                    "fixed",
+                                    "security"
+                                  ]
+                                },
+                                "description": {
+                                  "type": "string"
+                                },
+                                "endpoints": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "total": {
+                      "type": "integer",
+                      "description": "전체 변경 이력 수"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/info/version/{version}": {
+      "get": {
+        "summary": "특정 버전 정보 조회",
+        "description": "특정 API 버전의 상세 정보를 조회합니다.",
+        "tags": [
+          "API Info"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "조회할 버전 (예: v1)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "버전 정보 조회 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "string"
+                    },
+                    "releaseDate": {
+                      "type": "string",
+                      "format": "date"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "stable",
+                        "beta",
+                        "deprecated"
+                      ]
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "endpoints": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "deprecationDate": {
+                      "type": "string",
+                      "format": "date",
+                      "nullable": true
+                    },
+                    "supportEndDate": {
+                      "type": "string",
+                      "format": "date",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "버전을 찾을 수 없음",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/info/health": {
+      "get": {
+        "summary": "API 상태 확인",
+        "description": "API 서버의 상태와 의존성 서비스들의 상태를 확인합니다.",
+        "tags": [
+          "API Info"
+        ],
+        "responses": {
+          "200": {
+            "description": "서비스 정상 상태",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "healthy"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "uptime": {
+                      "type": "number",
+                      "description": "서버 가동 시간 (초)"
+                    },
+                    "version": {
+                      "type": "string",
+                      "description": "현재 API 버전"
+                    },
+                    "dependencies": {
+                      "type": "object",
+                      "properties": {
+                        "database": {
+                          "type": "string",
+                          "enum": [
+                            "healthy",
+                            "unhealthy",
+                            "unknown"
+                          ]
+                        },
+                        "redis": {
+                          "type": "string",
+                          "enum": [
+                            "healthy",
+                            "unhealthy",
+                            "unknown"
+                          ]
+                        },
+                        "kafka": {
+                          "type": "string",
+                          "enum": [
+                            "healthy",
+                            "unhealthy",
+                            "unknown"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "서비스 비정상 상태",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "unhealthy"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "summary": "회원가입",
+        "description": "새로운 사용자 계정을 생성합니다.",
+        "tags": [
+          "Authentication"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email",
+                  "password",
+                  "confirmPassword"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "사용자 이메일",
+                    "example": "user@example.com"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 8,
+                    "description": "비밀번호 (대문자, 소문자, 숫자, 특수문자 포함)",
+                    "example": "Password123!"
+                  },
+                  "confirmPassword": {
+                    "type": "string",
+                    "description": "비밀번호 확인",
+                    "example": "Password123!"
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "admin"
+                    ],
+                    "default": "user",
+                    "description": "사용자 역할"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "회원가입 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/AuthResponse"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "회원가입이 완료되었습니다."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "입력 데이터 검증 실패",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "이메일 중복",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 오류",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "summary": "로그인",
+        "description": "사용자 인증을 수행하고 JWT 토큰을 발급합니다.",
+        "tags": [
+          "Authentication"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email",
+                  "password"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "사용자 이메일",
+                    "example": "user@example.com"
+                  },
+                  "password": {
+                    "type": "string",
+                    "description": "사용자 비밀번호",
+                    "example": "Password123!"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "로그인 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "user": {
+                          "$ref": "#/components/schemas/User"
+                        },
+                        "accessToken": {
+                          "type": "string",
+                          "description": "JWT 액세스 토큰"
+                        },
+                        "tokenType": {
+                          "type": "string",
+                          "example": "Bearer"
+                        },
+                        "expiresIn": {
+                          "type": "integer",
+                          "description": "토큰 만료 시간 (초)",
+                          "example": 3600
+                        }
+                      }
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "로그인 성공"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 실패",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 오류",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/refresh": {
+      "post": {
+        "summary": "토큰 갱신",
+        "description": "Refresh Token을 사용하여 새로운 Access Token을 발급받습니다.",
+        "tags": [
+          "Authentication"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "refreshToken": {
+                    "type": "string",
+                    "description": "Refresh Token (쿠키로도 전송 가능)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "토큰 갱신 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "user": {
+                          "$ref": "#/components/schemas/User"
+                        },
+                        "accessToken": {
+                          "type": "string",
+                          "description": "새로운 JWT 액세스 토큰"
+                        },
+                        "tokenType": {
+                          "type": "string",
+                          "example": "Bearer"
+                        },
+                        "expiresIn": {
+                          "type": "integer",
+                          "example": 3600
+                        }
+                      }
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "토큰 갱신 성공"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "유효하지 않은 Refresh Token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "summary": "로그아웃",
+        "description": "현재 세션을 종료합니다.",
+        "tags": [
+          "Authentication"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "로그아웃 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "로그아웃되었습니다."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "summary": "현재 사용자 정보 조회",
+        "description": "인증된 사용자의 정보를 조회합니다.",
+        "tags": [
+          "Authentication"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "사용자 정보 조회 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "user": {
+                          "$ref": "#/components/schemas/User"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 실패",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/products": {
+      "get": {
+        "summary": "상품 목록 조회",
+        "description": "검색어를 통해 상품 목록을 조회합니다. 페이지네이션을 지원합니다.",
+        "tags": [
+          "Products"
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "type": "string"
+            },
+            "description": "검색어",
+            "example": "아이폰"
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "검색어 (q와 동일)"
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            },
+            "description": "페이지 번호"
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            },
+            "description": "페이지당 상품 수"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "상품 목록 조회 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "products": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Product"
+                      }
+                    },
+                    "total": {
+                      "type": "integer",
+                      "description": "조회된 상품 수"
+                    },
+                    "searchTerm": {
+                      "type": "string",
+                      "description": "검색어"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 오류",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/products/count": {
+      "get": {
+        "summary": "상품 개수 조회",
+        "description": "검색 조건에 맞는 상품의 총 개수를 조회합니다.",
+        "tags": [
+          "Products"
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "type": "string"
+            },
+            "description": "검색어"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "상품 개수 조회 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "count": {
+                      "type": "integer",
+                      "description": "상품 총 개수"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 오류"
+          }
+        }
+      }
+    },
+    "/api/products/{id}": {
+      "get": {
+        "summary": "상품 상세 조회",
+        "description": "특정 상품의 상세 정보를 조회합니다.",
+        "tags": [
+          "Products"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "상품 ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "상품 상세 조회 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Product"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "상품을 찾을 수 없음",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "서버 오류"
+          }
+        }
+      }
+    },
+    "/api/products/search": {
+      "post": {
+        "summary": "상품 검색 (크롤링 포함)",
+        "description": "키워드로 상품을 검색합니다. DB에 없는 경우 크롤링을 시작합니다.",
+        "tags": [
+          "Products"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "keyword"
+                ],
+                "properties": {
+                  "keyword": {
+                    "type": "string",
+                    "description": "검색할 키워드",
+                    "example": "아이폰 15"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "검색 성공",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "fromCache": {
+                      "type": "boolean",
+                      "description": "캐시에서 가져온 결과인지 여부"
+                    },
+                    "products": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Product"
+                      }
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "크롤링 시작 메시지 (캐시에 없는 경우)"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "잘못된 요청 (검색어 누락)"
+          },
+          "500": {
+            "description": "서버 오류"
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "서버 상태 확인",
+        "description": "서버가 정상적으로 실행 중인지 확인합니다.",
+        "tags": [
+          "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "서버 정상 상태",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "OK"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "KOSA Backend is running"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Analysis",
+      "description": "리뷰 분석 관련 API"
+    },
+    {
+      "name": "API Info",
+      "description": "API 정보 및 버전 관리"
+    },
+    {
+      "name": "Authentication",
+      "description": "사용자 인증 관련 API"
+    },
+    {
+      "name": "Products",
+      "description": "상품 관련 API"
+    }
+  ]
+}

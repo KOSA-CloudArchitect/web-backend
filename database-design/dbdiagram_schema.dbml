@@ -1,0 +1,335 @@
+// ========================================
+// 쿠팡 리뷰 분석 서비스 - 데이터베이스 스키마
+// PostgreSQL + MongoDB + Redis 구조
+// ========================================
+
+// ========================================
+// PostgreSQL 테이블 (관계형 데이터)
+// ========================================
+
+Table users {
+  id varchar [pk]
+  email varchar [unique, not null]
+  password varchar [not null]
+  role varchar [default: 'user']
+  is_active boolean [default: true]
+  email_verified boolean [default: false]
+  last_login_at timestamp [note: 'Redis: user_last_login:{user_id}']
+  failed_login_attempts int [default: 0, note: 'Redis: login_attempts:{email}']
+  locked_until timestamp [note: 'Redis: user_locked:{user_id}']
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
+  
+  Note: '사용자 기본 정보 및 인증'
+}
+
+Table user_profiles {
+  id varchar [pk]
+  user_id varchar [unique, not null, ref: > users.id]
+  first_name varchar
+  last_name varchar
+  phone varchar
+  avatar_url varchar
+  timezone varchar [default: 'Asia/Seoul']
+  language varchar [default: 'ko']
+  notification_preferences text
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
+  
+  Note: '사용자 프로필 상세 정보 (users 테이블과 통합 고려)'
+}
+
+Table products {
+  id varchar [pk]
+  name varchar [not null]
+  url varchar [unique, not null]
+  category varchar
+  current_price decimal
+  origin_price decimal
+  average_rating decimal
+  total_reviews int [default: 0]
+  image_url varchar
+  last_crawled_at timestamp
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
+  
+  Note: '상품 기본 정보 (RDB)'
+}
+
+// analysis_requests 테이블 제거 - Redis로 완전 이동
+
+Table analysis_results {
+  id varchar [pk]
+  product_id varchar [not null, ref: > products.id]
+  task_id varchar [unique, not null]
+  sentiment_positive decimal
+  sentiment_negative decimal
+  sentiment_neutral decimal
+  summary text
+  total_reviews int
+  average_rating decimal
+  processing_time int
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
+  
+  Note: '분석 결과 저장'
+}
+
+Table search_history {
+  id varchar [pk]
+  user_id varchar [not null, ref: > users.id]
+  query varchar [not null]
+  result_count int
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  
+  Note: '검색 기록 (필요성 재검토 필요)'
+}
+
+Table watch_list {
+  id varchar [pk]
+  user_id varchar [not null, ref: > users.id]
+  product_id varchar [not null, ref: > products.id]
+  analysis_frequency varchar [default: 'weekly', note: 'daily, weekly, monthly']
+  is_active boolean [default: true]
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
+  
+  indexes {
+    (user_id, product_id) [unique]
+  }
+  
+  Note: '관심 상품 목록 (가격 알림 기능 제거)'
+}
+
+Table system_config {
+  id varchar [pk]
+  key varchar [unique, not null, note: 'Redis: config:{key}']
+  value text [not null]
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
+  
+  Note: '시스템 설정 (Redis 캐시 + DB 백업)'
+}
+
+// ========================================
+// MongoDB 컬렉션 (문서형 데이터)
+// ========================================
+
+Table keywords {
+  id varchar [pk]
+  keyword varchar [not null]
+  tag varchar
+  category varchar
+  frequency int
+  sentiment_ratio json
+  created_at timestamp
+  updated_at timestamp
+  
+  Note: 'MongoDB collection - 키워드 마스터 데이터'
+}
+
+Table product_reviews_raw {
+  id varchar [pk]
+  product_id varchar [ref: > products.id]
+  review_date datetime
+  review_raw text
+  review_summary text
+  sentiment varchar [note: 'positive, negative, neutral']
+  review_rating float
+  keywords json
+  created_at timestamp
+  
+  Note: 'MongoDB collection - 크롤링된 리뷰 원본 데이터'
+}
+
+Table product_analysis_daily {
+  id varchar [pk]
+  product_id varchar [ref: > products.id]
+  rating json [note: 'average, distribution, total_count']
+  sentiment json [note: 'positive, negative, neutral counts']
+  price json [note: '현재가, 최저가, 최고가']
+  ts_day date
+  updated_at timestamp
+  
+  Note: 'MongoDB collection - 일별 상품 분석 집계'
+}
+
+Table product_analysis_monthly {
+  id varchar [pk]
+  product_id varchar [ref: > products.id]
+  rating json [note: 'average, trend, monthly_distribution']
+  sentiment json [note: 'positive, negative, neutral, trend']
+  price json [note: '현재가, 최저가, 평균가, 변동성']
+  ts_month date
+  updated_at timestamp
+  
+  Note: 'MongoDB collection - 월별 상품 분석 집계'
+}
+
+Table coupang_keyword_tags {
+  id varchar [pk]
+  product_id varchar [ref: > products.id]
+  keyword_categories json [note: '쿠팡에서 크롤링한 구조화된 키워드 태그']
+  crawled_at timestamp
+  source varchar [default: 'coupang']
+  
+  Note: 'MongoDB collection - 쿠팡 키워드 태그 (사용목적, 무게, 성능 등)'
+}
+
+// ========================================
+// Redis 데이터 구조 (캐시 및 실시간)
+// ========================================
+
+Table redis_user_sessions {
+  key varchar [pk, note: 'user_session:{user_id}:{session_id}']
+  refresh_token_hash varchar
+  device_info text
+  ip_address varchar
+  user_agent text
+  expires_at timestamp [note: 'TTL로 자동 관리']
+  last_used_at timestamp
+  
+  Note: 'Redis - 사용자 세션 관리 (PostgreSQL user_sessions 대체)'
+}
+
+Table redis_analysis_requests {
+  key varchar [pk, note: 'analysis_request:{task_id}']
+  id varchar [note: '요청 고유 ID']
+  user_id varchar [note: '요청한 사용자 ID']
+  product_id varchar [note: '분석 대상 상품 ID']
+  task_id varchar [note: '작업 고유 ID']
+  request_type varchar [note: 'realtime, batch']
+  status varchar [note: 'pending, processing, completed, failed']
+  progress int [note: '0-100 퍼센트']
+  current_step varchar [note: '현재 진행 단계']
+  total_reviews int
+  processed_reviews int
+  error_message text
+  created_at timestamp
+  started_at timestamp
+  completed_at timestamp
+  ttl int [note: '2시간 TTL (7200초)']
+  
+  Note: 'Redis - 분석 요청 전체 관리 (PostgreSQL analysis_requests 대체)'
+}
+
+Table redis_analysis_queue {
+  key varchar [pk, note: 'analysis_lock:{product_id}, analysis_queue:{product_id}']
+  task_id varchar
+  type varchar [note: 'batch, realtime']
+  status varchar [note: 'processing, completed']
+  user_count int
+  queue_data json [note: '대기열 사용자 목록']
+  started_at timestamp
+  estimated_completion timestamp
+  
+  Note: 'Redis - 동시 분석 요청 관리 및 작업 큐'
+}
+
+Table redis_crawling_status {
+  key varchar [pk, note: 'crawling_status:{product_id}']
+  status varchar [note: 'crawling, completed, failed']
+  started_at timestamp
+  pages_crawled int
+  total_pages int
+  reviews_collected int
+  
+  Note: 'Redis - 크롤링 진행 상태 관리'
+}
+
+Table redis_rate_limiting {
+  key varchar [pk, note: 'rate_limit_user:{user_id}:{minute}']
+  request_count int
+  ttl int [note: '60초 TTL']
+  
+  Note: 'Redis - API 레이트 리미팅'
+}
+
+Table redis_cache {
+  key varchar [pk, note: 'product_cache:{product_id}, search_cache:{query_hash}']
+  cached_data json
+  ttl int [note: '30분-6시간 TTL']
+  
+  Note: 'Redis - 자주 조회되는 데이터 캐시'
+}
+
+Table redis_websocket {
+  key varchar [pk, note: 'websocket_users:{user_id}']
+  connection_id varchar
+  connected_at timestamp
+  last_ping timestamp
+  
+  Note: 'Redis - WebSocket 연결 관리'
+}
+
+Table redis_statistics {
+  key varchar [pk, note: 'active_users:{date}, popular_products, analysis_stats_daily:{date}']
+  data_type varchar [note: 'hyperloglog, sorted_set, hash']
+  value json
+  
+  Note: 'Redis - 실시간 통계 및 모니터링'
+}
+
+// ========================================
+// 관계 정의
+// ========================================
+
+// PostgreSQL 관계
+Ref: user_profiles.user_id > users.id
+Ref: analysis_results.product_id > products.id
+Ref: search_history.user_id > users.id
+Ref: watch_list.user_id > users.id
+Ref: watch_list.product_id > products.id
+
+// MongoDB 관계 (논리적)
+Ref: product_reviews_raw.product_id > products.id
+Ref: product_analysis_daily.product_id > products.id
+Ref: product_analysis_monthly.product_id > products.id
+Ref: coupang_keyword_tags.product_id > products.id
+//
+ ========================================
+// 추가 Redis 구조 (확장)
+// ========================================
+
+Table redis_analysis_history {
+  key varchar [pk, note: 'user_analysis_history:{user_id}']
+  task_list json [note: '사용자별 분석 이력 (최근 50개)']
+  ttl int [note: '30일 TTL']
+  
+  Note: 'Redis - 사용자별 분석 이력 (List 구조)'
+}
+
+Table redis_popular_products {
+  key varchar [pk, note: 'popular_products, trending_products:{date}']
+  product_ranking json [note: 'Sorted Set - 인기 상품 랭킹']
+  analysis_count int [note: '분석 요청 횟수']
+  
+  Note: 'Redis - 인기 상품 및 트렌딩 데이터'
+}
+
+Table redis_user_activity {
+  key varchar [pk, note: 'user_last_activity:{user_id}, active_users:{date}']
+  activity_type varchar [note: 'login, analysis_request, search']
+  timestamp timestamp
+  data json [note: '활동 상세 정보']
+  
+  Note: 'Redis - 사용자 활동 추적 및 통계'
+}
+
+// ========================================
+// 데이터 흐름 주석
+// ========================================
+
+/*
+데이터 흐름:
+1. 분석 요청: 사용자 → Redis (analysis_request) → 분석 서버
+2. 진행률 업데이트: 분석 서버 → Redis (실시간) → WebSocket → 사용자
+3. 결과 저장: 분석 서버 → MongoDB (영구 저장) + PostgreSQL (요약)
+4. 캐시 활용: 자주 조회되는 데이터 → Redis 캐시 → 빠른 응답
+
+Redis TTL 정책:
+- 분석 요청: 2시간 (완료 후 자동 삭제)
+- 세션: 7일 (로그인 유지 기간)
+- 캐시: 30분-6시간 (데이터 유형별)
+- 통계: 1일-30일 (보관 기간별)
+*/
