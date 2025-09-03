@@ -10,29 +10,18 @@ spec:
   containers:
   - name: jnlp
     image: jenkins/inbound-agent:latest
-    args:
-    - "\$(JENKINS_SECRET)"
-    - "\$(JENKINS_NAME)"
+    args: ["\$(JENKINS_SECRET)", "\$(JENKINS_NAME)"]
   - name: node
     image: node:18-slim
-    command:
-    - sleep
-    args:
-    - infinity
+    command: ["sleep"], args: ["infinity"]
   - name: podman
     image: quay.io/podman/stable
-    command:
-    - sleep
-    args:
-    - infinity
+    command: ["sleep"], args: ["infinity"]
     securityContext:
       privileged: true
   - name: aws-cli
     image: amazon/aws-cli:latest
-    command:
-    - sleep
-    args:
-    - infinity
+    command: ["sleep"], args: ["infinity"]
 """
         }
     }
@@ -51,12 +40,11 @@ spec:
 
         stage('Build Application') {
             steps {
-                // web-backend 리포지토리의 backend 폴더로 이동하여 빌드
-                dir('backend') {
-                    container('node') {
-                        sh 'npm install'
-                        sh 'npm run build'
-                    }
+                // [수정] dir('backend') 제거
+                container('node') {
+                    sh 'npm install'
+                    sh 'npx prisma generate'
+                    sh 'npm run build'
                 }
             }
         }
@@ -68,18 +56,17 @@ spec:
                     container('aws-cli') {
                         ecrLoginPassword = sh(script: "aws ecr get-login-password --region ${AWS_REGION}", returnStdout: true).trim()
                     }
-                    dir('backend') {
-                        container('podman') {
-                            sh "echo '${ecrLoginPassword}' | podman login --username AWS --password-stdin ${ECR_BACKEND_URI}"
-                            
-                            def imageTag = "build-${BUILD_NUMBER}"
-                            def fullImageName = "${ECR_BACKEND_URI}:${imageTag}"
-                            
-                            sh "podman build -t ${fullImageName} ."
-                            sh "podman push ${fullImageName}"
+                    // [수정] dir('backend') 제거
+                    container('podman') {
+                        sh "echo '${ecrLoginPassword}' | podman login --username AWS --password-stdin ${ECR_BACKEND_URI}"
+                        
+                        def imageTag = "build-${BUILD_NUMBER}"
+                        def fullImageName = "${ECR_BACKEND_URI}:${imageTag}"
+                        
+                        sh "podman build -t ${fullImageName} ."
+                        sh "podman push ${fullImageName}"
 
-                            echo "Successfully pushed image: ${fullImageName}"
-                        }
+                        echo "Successfully pushed image: ${fullImageName}"
                     }
                 }
             }
