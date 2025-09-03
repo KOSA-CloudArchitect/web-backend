@@ -10,18 +10,29 @@ spec:
   containers:
   - name: jnlp
     image: jenkins/inbound-agent:latest
-    args: ["\$(JENKINS_SECRET)", "\$(JENKINS_NAME)"]
+    args:
+    - "\$(JENKINS_SECRET)"
+    - "\$(JENKINS_NAME)"
   - name: node
     image: node:18-slim
-    command: ["sleep"], args: ["infinity"]
+    command:
+    - sleep
+    args:
+    - infinity
   - name: podman
     image: quay.io/podman/stable
-    command: ["sleep"], args: ["infinity"]
+    command:
+    - sleep
+    args:
+    - infinity
     securityContext:
       privileged: true
   - name: aws-cli
     image: amazon/aws-cli:latest
-    command: ["sleep"], args: ["infinity"]
+    command:
+    - sleep
+    args:
+    - infinity
 """
         }
     }
@@ -29,6 +40,7 @@ spec:
     environment {
         AWS_REGION = 'ap-northeast-2'
         ECR_BACKEND_URI = '890571109462.dkr.ecr.ap-northeast-2.amazonaws.com/web-server-backend'
+        GITHUB_CREDENTIAL_ID = 'github-pat'
     }
 
     stages {
@@ -40,7 +52,6 @@ spec:
 
         stage('Build Application') {
             steps {
-                // [수정] dir('backend') 제거
                 container('node') {
                     sh 'npm install'
                     sh 'npx prisma generate'
@@ -56,7 +67,6 @@ spec:
                     container('aws-cli') {
                         ecrLoginPassword = sh(script: "aws ecr get-login-password --region ${AWS_REGION}", returnStdout: true).trim()
                     }
-                    // [수정] dir('backend') 제거
                     container('podman') {
                         sh "echo '${ecrLoginPassword}' | podman login --username AWS --password-stdin ${ECR_BACKEND_URI}"
                         
