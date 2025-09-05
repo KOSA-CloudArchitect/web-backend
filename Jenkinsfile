@@ -1,4 +1,3 @@
-//test 자동빌드 확인 추가
 pipeline {
     agent {
         kubernetes {
@@ -11,29 +10,18 @@ spec:
   containers:
   - name: jnlp
     image: jenkins/inbound-agent:latest
-    args:
-    - "\$(JENKINS_SECRET)"
-    - "\$(JENKINS_NAME)"
+    args: ["\$(JENKINS_SECRET)", "\$(JENKINS_NAME)"]
   - name: node
     image: node:18-slim
-    command:
-    - sleep
-    args:
-    - infinity
+    command: ["sleep"], args: ["infinity"]
   - name: podman
     image: quay.io/podman/stable
-    command:
-    - sleep
-    args:
-    - infinity
+    command: ["sleep"], args: ["infinity"]
     securityContext:
       privileged: true
   - name: aws-cli
     image: amazon/aws-cli:latest
-    command:
-    - sleep
-    args:
-    - infinity
+    command: ["sleep"], args: ["infinity"]
 """
         }
     }
@@ -41,7 +29,6 @@ spec:
     environment {
         AWS_REGION = 'ap-northeast-2'
         ECR_BACKEND_URI = '890571109462.dkr.ecr.ap-northeast-2.amazonaws.com/web-server-backend'
-        GITHUB_CREDENTIAL_ID = 'github-pat'
     }
 
     stages {
@@ -51,19 +38,26 @@ spec:
             }
         }
 
-        stage('Build Application') {
+        stage('Build & Test (Verification)') {
             steps {
+                // 이 단계는 모든 브랜치에서 실행됩니다.
                 container('node') {
                     sh 'npm install'
                     sh 'npx prisma generate'
                     sh 'npm run build'
+                    // 필요 시 여기에 'npm test'와 같은 테스트 명령어를 추가할 수 있습니다.
                 }
             }
         }
 
+        // --- [수정] 'when' 조건을 추가하여 main 브랜치에서만 실행되도록 설정 ---
         stage('Build & Push Image') {
+            when {
+                branch 'main'
+            }
             steps {
                 script {
+                    echo "--- Running on main branch. Building and pushing image. ---"
                     def ecrLoginPassword
                     container('aws-cli') {
                         ecrLoginPassword = sh(script: "aws ecr get-login-password --region ${AWS_REGION}", returnStdout: true).trim()
