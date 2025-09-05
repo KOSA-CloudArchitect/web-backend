@@ -50,21 +50,20 @@ spec:
             }
         }
 
+        // develop 브랜치에서는 이 단계까지만 실행됩니다.
         stage('Build & Test') {
             steps {
                 container('node') {
                     sh 'npm install'
                     sh 'npx prisma generate'
                     sh 'npm run build'
-                    // 테스트 코드가 있다면 아래와 같이 추가
-                    // sh 'npm run test'
                 }
             }
         }
 
+        // main 브랜치일 때만 이 단계를 실행합니다.
         stage('Build & Push Image') {
             when {
-                // main 브랜치에 변경사항이 있을 때만 이 스테이지를 실행
                 branch 'main'
             }
             steps {
