@@ -1,3 +1,4 @@
+//test 자동빌드 확인 추가
 pipeline {
     agent {
         kubernetes {
