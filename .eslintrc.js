@@ -7,13 +7,11 @@ module.exports = {
   },
   extends: [
     'eslint:recommended',
-    '@typescript-eslint/recommended',
   ],
   parser: '@typescript-eslint/parser',
   parserOptions: {
     ecmaVersion: 'latest',
     sourceType: 'module',
-    project: './tsconfig.json',
   },
   plugins: [
     '@typescript-eslint',
@@ -69,5 +67,7 @@ module.exports = {
     'coverage/',
     '*.min.js',
     'prisma/generated/',
+    'src/generated/',
+    'test-*.js',
   ],
 };

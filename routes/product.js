@@ -7,17 +7,9 @@ const { cacheService } = require('../services/cacheService');
 const { normalizeItem } = require('../utils/normalize');
 const { connectMongoDB } = require('../config/mongodb');  // DB 연결 보장
 const { saveBatchFromCrawler } = require('../services/nosql');  // 배치 저장
+const websocketService = require('../services/websocketService');
 
-// =========================
-// MongoDB 연결 보장 미들웨어
-// =========================
-router.use(async (_req, _res, next) => {
-  const db = await connectMongoDB(); // DB 연결 보장
-  if (!db) {
-    return _res.status(503).json({ error: 'MongoDB 연결 실패' });
-  }
-  next();  // 다음 미들웨어로 진행
-});
+// MongoDB 연결 미들웨어 제거 - 각 엔드포인트에서 개별 처리
 
 // =========================
 // GET /api/products (기존 데이터 조회 + 필요시 크롤링)
@@ -310,61 +302,83 @@ router.post('/', async (req, res) => {
 
     // 강제 크롤링이 아닌 경우에만 캐시와 DB 확인
     if (!forceCrawl) {
-      // 1. 먼저 Redis 캐시에서 검색 결과 확인
-      console.log('🔍 Redis 캐시에서 검색 결과 확인 중...');
-      const cachedResults = await cacheService.getSearchResults(keyword);
+      // 1. 검색어 기반 30분 시간 캐시 확인
+      console.log(`🔍 검색어 기반 시간 캐시 확인: "${keyword}"`);
+      const searchCache = require('../models/SearchCache');
+      const cachedSearch = searchCache.getSearch(keyword);
       
-      if (cachedResults && cachedResults.results && cachedResults.results.products) {
-        console.log(`✅ 캐시에서 검색 결과 발견: ${keyword} - ${cachedResults.totalCount}개 상품`);
+      if (cachedSearch) {
+        const remainingMinutes = Math.round((cachedSearch.expiresAt - new Date())/1000/60);
+        console.log(`✅ 검색 캐시 히트: "${keyword}" - ${cachedSearch.productCount}개 상품 (${remainingMinutes}분 남음)`);
         
-        // 페이지 기반 캐시 결과 반환
+        // 페이지 기반 결과 반환
         const startIndex = (page - 1) * per_page;
         const endIndex = startIndex + per_page;
-        const pageProducts = cachedResults.results.products.slice(startIndex, endIndex);
+        const pageProducts = cachedSearch.products.slice(startIndex, endIndex);
         
         if (pageProducts.length > 0) {
-          const jobId = `cached_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          // 동일한 jobId 생성 로직 사용 (같은 검색어면 같은 jobId)
+          const timeWindow = Math.floor(Date.now() / (5 * 60 * 1000));
+          const searchKey = `${keyword}_${page}_${per_page}_${max_links}`;
+          const jobId = `cached_${searchKey.replace(/[^a-zA-Z0-9가-힣]/g, '_')}_${timeWindow}`;
           
           return res.json({
             success: true,
             jobId,
-            message: `캐시된 결과 페이지 ${page}: ${pageProducts.length}개 상품`,
+            message: `캐시된 검색 결과: "${keyword}" (페이지 ${page}, ${remainingMinutes}분 남음)`,
             status: 'completed',
             products: pageProducts,
             productCount: pageProducts.length,
             cached: true,
-            cachedAt: cachedResults.cachedAt,
+            searchTime: cachedSearch.searchTime,
+            expiresAt: cachedSearch.expiresAt,
+            remainingMinutes,
             pagination: {
               page,
               per_page,
-              total: cachedResults.totalCount,
-              hasMore: endIndex < cachedResults.totalCount
-            }
+              total: cachedSearch.productCount,
+              hasMore: endIndex < cachedSearch.productCount
+            },
+            timestamp: new Date().toISOString()
           });
         } else {
-          console.log(`⚠️ 캐시에서 페이지 ${page} 데이터 없음: 총 ${cachedResults.totalCount}개, 요청 범위: ${startIndex}-${endIndex}`);
+          console.log(`⚠️ 캐시에서 페이지 ${page} 데이터 없음: 총 ${cachedSearch.productCount}개, 요청 범위: ${startIndex}-${endIndex}`);
         }
       } else {
-        console.log('🔍 캐시에 검색 결과 없음, DB 확인');
+        console.log('🔍 검색어 캐시 없음 또는 만료 (30분 초과), 새로운 크롤링 필요');
       }
 
-      // 2. MongoDB에서 기존 데이터 확인
-      console.log('📋 MongoDB에서 기존 데이터 조회 중...');
-      const db = await connectMongoDB();
-      const queryObj = { title: { $regex: new RegExp(escapeRegex(keyword), 'i') } };
+      // 2. MongoDB에서 기존 데이터 확인 (연결 가능한 경우에만)
+      let pageProducts = [];
+      let totalProducts = 0;
       
-      // 페이지 기반으로 MongoDB 조회
-      const totalProducts = await db.collection('products').countDocuments(queryObj);
-      const startIndex = (page - 1) * per_page;
-      
-      const pageProducts = await db.collection('products')
-        .find(queryObj)
-        .sort({ last_seen_at: -1 })
-        .skip(startIndex)
-        .limit(per_page)
-        .toArray();
+      try {
+        console.log('📋 MongoDB에서 기존 데이터 조회 중...');
+        const db = await connectMongoDB();
+        
+        if (db) {
+          const queryObj = { title: { $regex: new RegExp(escapeRegex(keyword), 'i') } };
+          
+          // 페이지 기반으로 MongoDB 조회
+          totalProducts = await db.collection('products').countDocuments(queryObj);
+          const startIndex = (page - 1) * per_page;
+          
+          pageProducts = await db.collection('products')
+            .find(queryObj)
+            .sort({ last_seen_at: -1 })
+            .skip(startIndex)
+            .limit(per_page)
+            .toArray();
 
-      console.log(`📋 MongoDB 총 ${totalProducts}개 상품 중 페이지 ${page}에서 ${pageProducts.length}개 발견`);
+          console.log(`📋 MongoDB 총 ${totalProducts}개 상품 중 페이지 ${page}에서 ${pageProducts.length}개 발견`);
+        } else {
+          console.log('⚠️ MongoDB 연결 불가, 크롤링으로 진행');
+        }
+      } catch (dbError) {
+        console.warn('⚠️ MongoDB 조회 실패, 크롤링으로 진행:', dbError.message);
+        pageProducts = [];
+        totalProducts = 0;
+      }
 
       // 3. MongoDB에서 해당 페이지 데이터가 있으면 바로 반환
       if (pageProducts.length > 0) {
@@ -423,8 +437,23 @@ router.post('/', async (req, res) => {
     }
 
     // 4. 캐시와 DB에 충분한 데이터가 없으면 크롤링 수행
-    // 작업 ID 생성
-    const jobId = `crawl_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    // 작업 ID 생성 - 같은 검색 조건이면 같은 jobId 사용 (5분 단위로 갱신)
+    const timeWindow = Math.floor(Date.now() / (5 * 60 * 1000)); // 5분 단위 윈도우
+    const searchKey = `${keyword}_${page}_${per_page}_${max_links}`;
+    const jobId = `crawl_${searchKey.replace(/[^a-zA-Z0-9가-힣]/g, '_')}_${timeWindow}`;
+
+    // 이미 진행 중인 작업이 있는지 확인
+    const existingJob = crawlJobs.get(jobId);
+    if (existingJob && existingJob.status === 'started') {
+      console.log(`⏳ 이미 진행 중인 크롤링 작업: ${jobId}`);
+      return res.json({
+        success: true,
+        jobId,
+        status: 'started',
+        message: `검색 작업이 이미 진행 중입니다: "${keyword}"`,
+        timestamp: new Date().toISOString()
+      });
+    }
 
     // 작업 상태 초기화
     crawlJobs.set(jobId, {
@@ -440,8 +469,29 @@ router.post('/', async (req, res) => {
 
     console.log(`🔍 크롤링 작업 시작: ${jobId} - ${keyword} (페이지 ${page})`);
 
+    // WebSocket으로 실시간 검색 시작 알림
+    try {
+      await websocketService.emitToRoom(`search:${jobId}`, 'search-started', {
+        jobId,
+        status: 'started',
+        keyword,
+        page,
+        per_page,
+        max_links,
+        timestamp: new Date().toISOString(),
+        message: `검색 시작: "${keyword}" 상품을 찾고 있습니다...`
+      });
+      console.log(`🔔 WebSocket search start notification sent: ${jobId}`);
+    } catch (wsError) {
+      console.warn('⚠️ WebSocket 시작 알림 전송 실패:', wsError.message);
+    }
+
     // 동기적으로 크롤링 실행 후 결과 반환
     console.log(`📡 크롤링 실행 시작: ${jobId}`);
+
+    // 크롤링 상태 폴링 시작
+    const crawlingStatusService = require('../services/crawlingStatusService');
+    crawlingStatusService.startStatusPolling(keyword, jobId);
 
     // 크롤링 서버 호출 - 페이지 기반 파라미터 추가
     const crawlingServerUrl = process.env.CRAWLING_SERVER_URL || 'http://10.128.3.36:30800';
@@ -512,24 +562,60 @@ router.post('/', async (req, res) => {
 
     console.log(`✅ 크롤링 작업 완료: ${jobId} - ${normalized.length}개 상품 저장됨`);
 
-    // 3. 크롤링 결과를 Redis 캐시에 저장
-    console.log(`💾 Redis 캐시에 검색 결과 저장 중: ${keyword}`);
+    // 3. 크롤링 결과를 검색어 기반 시간 캐시에 저장 (30분)
+    console.log(`💾 검색어 기반 캐시에 결과 저장 중: "${keyword}"`);
     try {
-      const searchResults = {
-        query: keyword,
-        products: normalized,
-        total: normalized.length,
-        timestamp: new Date().toISOString()
-      };
+      const searchCache = require('../models/SearchCache');
+      const searchInfo = searchCache.saveSearch(keyword, normalized, {
+        page,
+        per_page,
+        max_links,
+        crawledAt: new Date().toISOString(),
+        fromCrawling: true,
+        forceCrawl
+      });
       
-      await cacheService.setSearchResults(keyword, searchResults);
-      console.log(`✅ Redis 캐시 저장 완료: ${keyword} - ${normalized.length}개 상품`);
+      console.log(`✅ 검색어 캐시 저장 완료: "${keyword}" - ${normalized.length}개 상품 (30분 유효)`);
       
-      // 인기 검색어에도 추가
-      await cacheService.addPopularSearch(keyword);
+      // Redis 백업 캐시도 유지 (기존 시스템과의 호환성)
+      try {
+        const searchResults = {
+          query: keyword,
+          products: normalized,
+          total: normalized.length,
+          timestamp: new Date().toISOString()
+        };
+        
+        await cacheService.setSearchResults(keyword, searchResults);
+        await cacheService.addPopularSearch(keyword);
+        console.log(`✅ Redis 백업 캐시 저장 완료: ${keyword}`);
+      } catch (redisError) {
+        console.warn('⚠️ Redis 백업 캐시 저장 실패 (무시됨):', redisError.message);
+      }
     } catch (cacheError) {
-      console.warn('⚠️ Redis 캐시 저장 실패:', cacheError);
+      console.warn('⚠️ 검색어 캐시 저장 실패:', cacheError.message);
       // 캐시 실패는 무시하고 계속 진행
+    }
+
+    // WebSocket으로 실시간 검색 결과 알림
+    try {
+      await websocketService.emitToRoom(`search:${jobId}`, 'search-completed', {
+        jobId,
+        status: 'completed',
+        keyword,
+        products: normalized,
+        productCount: normalized.length,
+        cached: false,
+        fromCrawling: true,
+        forceCrawl: forceCrawl,
+        page,
+        per_page,
+        timestamp: new Date().toISOString(),
+        message: `검색 완료: "${keyword}"에 대한 ${normalized.length}개 상품을 찾았습니다.`
+      });
+      console.log(`🔔 WebSocket search notification sent: ${jobId} - ${normalized.length} products`);
+    } catch (wsError) {
+      console.warn('⚠️ WebSocket 알림 전송 실패:', wsError.message);
     }
 
     // 즉시 결과 반환 - 페이지 정보 포함
@@ -557,6 +643,23 @@ router.post('/', async (req, res) => {
   } catch (e) {
     console.error('❌ POST 크롤링 시작 오류:', e);
     
+    // WebSocket으로 실시간 검색 오류 알림
+    const errorJobId = `error_${Date.now()}`;
+    
+    try {
+      await websocketService.emitToRoom(`search:${errorJobId}`, 'search-error', {
+        jobId: errorJobId,
+        status: 'error',
+        keyword,
+        error: e.message,
+        timestamp: new Date().toISOString(),
+        message: `검색 오류: "${keyword}" 검색 중 문제가 발생했습니다.`
+      });
+      console.log(`🔔 WebSocket search error notification sent: ${errorJobId}`);
+    } catch (wsError) {
+      console.warn('⚠️ WebSocket 오류 알림 전송 실패:', wsError.message);
+    }
+
     // 504 Gateway Timeout이나 네트워크 오류의 경우 더 관대하게 처리
     if (e.response && e.response.status === 504) {
       console.warn('⚠️ 크롤링 서버 Gateway Timeout - 빈 결과로 응답');
@@ -780,5 +883,88 @@ async function performCrawling(jobId, keyword, max_links) {
 function escapeRegex(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+// =========================
+// GET /api/products/cache/status (검색 캐시 상태 조회)
+// =========================
+router.get('/cache/status', async (req, res) => {
+  try {
+    const searchCache = require('../models/SearchCache');
+    const stats = searchCache.getStats();
+    
+    res.json({
+      success: true,
+      cacheStats: {
+        activeSearches: stats.activeSearches,
+        expiredSearches: stats.expiredSearches,
+        totalMemoryUsage: stats.totalMemoryUsage,
+        cacheHitRate: stats.activeSearches > 0 ? '활성 캐시 있음' : '캐시 없음',
+        cacheDuration: '30분',
+        cleanupInterval: '5분마다'
+      },
+      searches: stats.searches.map(search => ({
+        keyword: search.keyword,
+        productCount: search.productCount,
+        remainingMinutes: search.remainingMinutes,
+        searchTime: search.searchTime,
+        status: search.remainingMinutes > 0 ? 'active' : 'expired'
+      })),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ 캐시 상태 조회 오류:', error);
+    res.status(500).json({ error: '캐시 상태 조회 중 오류가 발생했습니다.' });
+  }
+});
+
+// =========================
+// DELETE /api/products/cache/:keyword (특정 검색어 캐시 삭제)
+// =========================
+router.delete('/cache/:keyword', async (req, res) => {
+  try {
+    const { keyword } = req.params;
+    const searchCache = require('../models/SearchCache');
+    
+    const deleted = searchCache.invalidateSearch(keyword);
+    
+    if (deleted) {
+      res.json({
+        success: true,
+        message: `검색어 캐시가 삭제되었습니다: "${keyword}"`,
+        keyword,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: `캐시를 찾을 수 없습니다: "${keyword}"`,
+        keyword
+      });
+    }
+  } catch (error) {
+    console.error('❌ 캐시 삭제 오류:', error);
+    res.status(500).json({ error: '캐시 삭제 중 오류가 발생했습니다.' });
+  }
+});
+
+// =========================
+// DELETE /api/products/cache (모든 캐시 삭제)
+// =========================
+router.delete('/cache', async (req, res) => {
+  try {
+    const searchCache = require('../models/SearchCache');
+    const deletedCount = searchCache.clear();
+    
+    res.json({
+      success: true,
+      message: `모든 검색 캐시가 삭제되었습니다: ${deletedCount}개`,
+      deletedCount,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ 전체 캐시 삭제 오류:', error);
+    res.status(500).json({ error: '전체 캐시 삭제 중 오류가 발생했습니다.' });
+  }
+});
 
 module.exports = router;

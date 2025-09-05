@@ -1,6 +1,26 @@
 module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>'],
+  projects: [
+    {
+      displayName: 'unit',
+      testMatch: [
+        '**/__tests__/**/*.test.js',
+        '**/__tests__/**/*.spec.js'
+      ],
+      testPathIgnorePatterns: [
+        '/integration/',
+        '/e2e/'
+      ]
+    },
+    {
+      displayName: 'integration',
+      testMatch: [
+        '**/__tests__/integration/**/*.test.js',
+        '**/__tests__/integration/**/*.spec.js'
+      ]
+    }
+  ],
   testMatch: [
     '**/__tests__/**/*.js',
     '**/__tests__/**/*.ts', 

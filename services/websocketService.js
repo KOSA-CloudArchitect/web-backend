@@ -1,4 +1,5 @@
 const logger = require('../config/logger');
+const axios = require('axios');
 
 class WebSocketService {
   constructor() {
@@ -6,6 +7,9 @@ class WebSocketService {
     this.connectedClients = new Map();
     this.rooms = new Map();
     this.eventHandlers = new Map();
+    
+    // 웹소켓 서버 URL 설정
+    this.websocketUrl = process.env.WEBSOCKET_URL || 'http://websocket-service.web-tier.svc.cluster.local:3002';
   }
 
   /**
@@ -231,18 +235,40 @@ class WebSocketService {
   }
 
   /**
-   * 특정 룸에 메시지 전송
+   * 특정 룸에 메시지 전송 (HTTP API 우선, fallback은 직접 emit)
    */
-  emitToRoom(roomName, event, data) {
-    if (!this.io) return;
-
-    this.io.to(roomName).emit(event, {
-      ...data,
-      timestamp: new Date().toISOString(),
-      room: roomName
-    });
-
-    logger.debug(`📤 룸 메시지 전송 [${roomName}]: ${event}`);
+  async emitToRoom(roomName, event, data) {
+    // HTTP API를 통해 웹소켓 서버로 메시지 전송 시도
+    try {
+      const response = await axios.post(`${this.websocketUrl}/api/broadcast`, {
+        event,
+        data: {
+          ...data,
+          room: roomName
+        }
+      }, {
+        timeout: 3000,
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      logger.debug(`📤 룸 메시지 HTTP API로 전송 [${roomName}]: ${event}`);
+      return response.data;
+      
+    } catch (error) {
+      logger.warn(`⚠️ HTTP API 전송 실패, fallback 사용 [${roomName}]: ${event}`, error.message);
+      
+      // HTTP API 실패 시 기존 방식으로 fallback
+      if (this.io) {
+        this.io.to(roomName).emit(event, {
+          ...data,
+          timestamp: new Date().toISOString(),
+          room: roomName
+        });
+        logger.debug(`📤 룸 메시지 직접 전송 [${roomName}]: ${event}`);
+      }
+    }
   }
 
   /**
@@ -260,28 +286,76 @@ class WebSocketService {
   }
 
   /**
-   * 모든 클라이언트에 브로드캐스트
+   * 모든 클라이언트에 브로드캐스트 (HTTP API 우선)
    */
-  broadcast(event, data) {
-    if (!this.io) return;
-
-    this.io.emit(event, {
-      ...data,
-      timestamp: new Date().toISOString()
-    });
-
-    logger.debug(`📢 브로드캐스트: ${event}`);
+  async broadcast(event, data) {
+    try {
+      const response = await axios.post(`${this.websocketUrl}/api/broadcast`, {
+        event,
+        data
+      }, {
+        timeout: 3000,
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      logger.debug(`📢 브로드캐스트 HTTP API로 전송: ${event}`);
+      return response.data;
+      
+    } catch (error) {
+      logger.warn(`⚠️ 브로드캐스트 HTTP API 실패, fallback 사용: ${event}`, error.message);
+      
+      // HTTP API 실패 시 기존 방식으로 fallback
+      if (this.io) {
+        this.io.emit(event, {
+          ...data,
+          timestamp: new Date().toISOString()
+        });
+        logger.debug(`📢 브로드캐스트 직접 전송: ${event}`);
+      }
+    }
   }
 
   /**
-   * 분석 상태 업데이트 전송
+   * 분석 상태 업데이트 전송 (HTTP API를 통해 웹소켓 서버로)
    */
-  sendAnalysisUpdate(requestId, statusData) {
-    const roomName = `analysis:${requestId}`;
-    this.emitToRoom(roomName, 'analysis-update', {
-      requestId,
-      ...statusData
-    });
+  async sendAnalysisUpdate(requestId, statusData) {
+    try {
+      const response = await axios.post(`${this.websocketUrl}/api/analysis-update`, {
+        requestId,
+        statusData
+      }, {
+        timeout: 5000,
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      logger.info(`✅ Analysis update sent via HTTP API: ${requestId}`, {
+        roomName: `analysis:${requestId}`,
+        clientCount: response.data.clientCount || 0
+      });
+      
+      return response.data;
+    } catch (error) {
+      logger.error(`❌ Failed to send analysis update via HTTP API:`, {
+        requestId,
+        error: error.message,
+        websocketUrl: this.websocketUrl
+      });
+      
+      // HTTP API 실패 시 기존 방식으로 fallback (io가 있는 경우)
+      if (this.io) {
+        const roomName = `analysis:${requestId}`;
+        this.emitToRoom(roomName, 'analysis-update', {
+          requestId,
+          ...statusData
+        });
+      }
+      
+      throw error;
+    }
   }
 
   /**

@@ -7,6 +7,7 @@ const { cacheService } = require('../services/cacheService');
 const { normalizeItem } = require('../utils/normalize');
 const { connectMongoDB } = require('../config/mongodb');  // DB 연결 보장
 const { saveBatchFromCrawler } = require('../services/nosql');  // 배치 저장
+const websocketService = require('../services/websocketService');
 
 // =========================
 // MongoDB 연결 보장 미들웨어
@@ -440,6 +441,23 @@ router.post('/', async (req, res) => {
 
     console.log(`🔍 크롤링 작업 시작: ${jobId} - ${keyword} (페이지 ${page})`);
 
+    // WebSocket으로 실시간 검색 시작 알림
+    try {
+      await websocketService.emitToRoom(`search:${jobId}`, 'search-started', {
+        jobId,
+        status: 'started',
+        keyword,
+        page,
+        per_page,
+        max_links,
+        timestamp: new Date().toISOString(),
+        message: `검색 시작: "${keyword}" 상품을 찾고 있습니다...`
+      });
+      console.log(`🔔 WebSocket search start notification sent: ${jobId}`);
+    } catch (wsError) {
+      console.warn('⚠️ WebSocket 시작 알림 전송 실패:', wsError.message);
+    }
+
     // 동기적으로 크롤링 실행 후 결과 반환
     console.log(`📡 크롤링 실행 시작: ${jobId}`);
 
@@ -532,6 +550,27 @@ router.post('/', async (req, res) => {
       // 캐시 실패는 무시하고 계속 진행
     }
 
+    // WebSocket으로 실시간 검색 결과 알림
+    try {
+      await websocketService.emitToRoom(`search:${jobId}`, 'search-completed', {
+        jobId,
+        status: 'completed',
+        keyword,
+        products: normalized,
+        productCount: normalized.length,
+        cached: false,
+        fromCrawling: true,
+        forceCrawl: forceCrawl,
+        page,
+        per_page,
+        timestamp: new Date().toISOString(),
+        message: `검색 완료: "${keyword}"에 대한 ${normalized.length}개 상품을 찾았습니다.`
+      });
+      console.log(`🔔 WebSocket search notification sent: ${jobId} - ${normalized.length} products`);
+    } catch (wsError) {
+      console.warn('⚠️ WebSocket 알림 전송 실패:', wsError.message);
+    }
+
     // 즉시 결과 반환 - 페이지 정보 포함
     res.json({
       success: true,
@@ -557,6 +596,23 @@ router.post('/', async (req, res) => {
   } catch (e) {
     console.error('❌ POST 크롤링 시작 오류:', e);
     
+    // WebSocket으로 실시간 검색 오류 알림
+    const errorJobId = `error_${Date.now()}`;
+    
+    try {
+      await websocketService.emitToRoom(`search:${errorJobId}`, 'search-error', {
+        jobId: errorJobId,
+        status: 'error',
+        keyword,
+        error: e.message,
+        timestamp: new Date().toISOString(),
+        message: `검색 오류: "${keyword}" 검색 중 문제가 발생했습니다.`
+      });
+      console.log(`🔔 WebSocket search error notification sent: ${errorJobId}`);
+    } catch (wsError) {
+      console.warn('⚠️ WebSocket 오류 알림 전송 실패:', wsError.message);
+    }
+
     // 504 Gateway Timeout이나 네트워크 오류의 경우 더 관대하게 처리
     if (e.response && e.response.status === 504) {
       console.warn('⚠️ 크롤링 서버 Gateway Timeout - 빈 결과로 응답');

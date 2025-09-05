@@ -13,6 +13,7 @@ const { Sentry } = require('../config/sentry');
 const { getPool } = require('../config/database');
 const { AnalysisModel } = require('../models/analysis');
 const { cacheService } = require('../services/cacheService');
+const websocketService = require('../services/websocketService');
 
 const router = express.Router();
 
@@ -407,15 +408,14 @@ router.post('/callback', asyncHandler(async (req, res) => {
     }
 
     // 5. WebSocket으로 상태 업데이트 알림
-    const io = req.app.get('io');
-    if (io) {
-      io.emit(`analysis:${taskId}`, {
-        status,
-        result,
-        error,
-        timestamp: new Date().toISOString(),
-      });
-    }
+    websocketService.sendAnalysisUpdate(taskId, {
+      status,
+      result,
+      error,
+      type: 'callback_received',
+      message: status === 'completed' ? '분석이 완료되었습니다.' : 
+               status === 'failed' ? '분석이 실패했습니다.' : '분석 상태가 업데이트되었습니다.'
+    });
 
     // Sentry에 콜백 이벤트 기록
     Sentry.addBreadcrumb({

@@ -5,7 +5,6 @@ const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const http = require('http');
-const socketIo = require('socket.io');
 const db = require('./db');
 const { initSentry, setupSentryErrorHandler } = require('./config/sentry');
 const { getPool, closePool } = require('./config/database');
@@ -168,9 +167,10 @@ async function initRedis() {
 
 // WebSocket 연결 처리는 websocketService에서 자동으로 처리됨
 
-// 분석 상태 업데이트를 위한 함수
+// 분석 상태 업데이트를 위한 함수 (WebSocket 서비스를 통해)
 const updateAnalysisStatus = (productId, status, data = {}) => {
-  io.emit(`analysis:${productId}`, {
+  websocketService.emitToRoom(`product:${productId}`, 'analysis-update', {
+    productId,
     status,
     ...data
   });
@@ -178,11 +178,14 @@ const updateAnalysisStatus = (productId, status, data = {}) => {
 
 // 분석 상태 변경 시 WebSocket으로 알림
 const notifyAnalysisStatus = (productId, status) => {
-  io.emit('analysis_status', { productId, status });
+  websocketService.emitToRoom(`product:${productId}`, 'analysis_status', { 
+    productId, 
+    status 
+  });
 };
 
-// analyzeRoutes에서 사용할 수 있도록 io 객체와 notifyAnalysisStatus 함수 전달
-app.set('io', io);
+// analyzeRoutes에서 사용할 수 있도록 WebSocket 서비스와 notifyAnalysisStatus 함수 전달
+app.set('websocketService', websocketService);
 app.set('notifyAnalysisStatus', notifyAnalysisStatus);
 
 // 정적 파일 서빙
@@ -295,6 +298,11 @@ async function startServer() {
 
     // Kafka 초기화 (현재 사용하지 않음)
     // await initKafka();
+
+    // WebSocket 서비스 초기화
+    logger.info('🔄 WebSocket 서비스 초기화 중...');
+    websocketService.initialize(server);
+    logger.info('✅ WebSocket 서비스 초기화 완료');
 
     // 에러 핸들러 설정
     setupSentryErrorHandler(app);

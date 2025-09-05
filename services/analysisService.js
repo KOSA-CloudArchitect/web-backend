@@ -5,6 +5,7 @@ const { Sentry } = require('../config/sentry');
 const RedisAnalysisRequest = require('../models/redisAnalysisRequest');
 const RedisAnalysisQueue = require('../models/redisAnalysisQueue');
 const MongoAnalysisResult = require('../models/mongoAnalysisResult');
+const websocketService = require('./websocketService');
 
 /**
  * 분석 서비스
@@ -124,6 +125,27 @@ class AnalysisService {
         dagRunId: dagRun.dagRunId,
         productId,
       });
+
+      // WebSocket으로 분석 시작 알림
+      websocketService.sendAnalysisUpdate(taskId, {
+        status: 'triggered',
+        type: 'analysis_started',
+        message: '상품 분석이 시작되었습니다.',
+        productId,
+        userId,
+        dagRunId: dagRun.dagRunId,
+        estimatedTime: '약 2-5분 소요 예정'
+      });
+
+      // 사용자 룸에도 알림
+      if (userId) {
+        await websocketService.emitToRoom(`user:${userId}`, 'analysis-started', {
+          taskId,
+          productId,
+          message: '상품 분석을 시작했습니다.',
+          dagRunId: dagRun.dagRunId
+        });
+      }
 
       return {
         status: 'triggered',
@@ -326,6 +348,46 @@ class AnalysisService {
       await this.redisQueue.completeQueue(analysisRequest.productId);
 
       console.log(`✅ Analysis result processed and saved: ${savedResult._id}`);
+
+      // WebSocket으로 실시간 분석 완료 알림
+      websocketService.sendAnalysisUpdate(taskId, {
+        status: 'completed',
+        type: 'result_saved',
+        message: '분석 결과가 MongoDB에 저장되었습니다.',
+        productId: analysisRequest.productId,
+        userId: analysisRequest.userId,
+        result: {
+          sentiment: analysisResultData.sentiment,
+          summary: analysisResultData.summary,
+          totalReviews: analysisResultData.totalReviews,
+          averageRating: analysisResultData.averageRating,
+          keywords: analysisResultData.keywords
+        },
+        mongoId: savedResult._id
+      });
+
+      // 상품별 룸에도 알림 (상품을 보고 있는 다른 사용자들에게)
+      await websocketService.emitToRoom(`product:${analysisRequest.productId}`, 'analysis-completed', {
+        productId: analysisRequest.productId,
+        taskId: taskId,
+        message: '새로운 분석 결과가 업데이트되었습니다.',
+        summary: analysisResultData.summary,
+        sentiment: analysisResultData.sentiment
+      });
+
+      // 사용자별 룸에도 알림
+      if (analysisRequest.userId) {
+        await websocketService.emitToRoom(`user:${analysisRequest.userId}`, 'my-analysis-completed', {
+          taskId: taskId,
+          productId: analysisRequest.productId,
+          message: '요청하신 분석이 완료되었습니다.',
+          result: {
+            sentiment: analysisResultData.sentiment,
+            summary: analysisResultData.summary,
+            totalReviews: analysisResultData.totalReviews
+          }
+        });
+      }
       
       return savedResult;
 
