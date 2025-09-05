@@ -12,7 +12,7 @@ spec:
     image: jenkins/inbound-agent:latest
     args: ["\$(JENKINS_SECRET)", "\$(JENKINS_NAME)"]
   - name: node
-    image: node:18-slim
+    image: node:20-alpine
     command: ["sleep"], args: ["infinity"]
   - name: podman
     image: quay.io/podman/stable
@@ -28,7 +28,7 @@ spec:
 
     environment {
         AWS_REGION = 'ap-northeast-2'
-        ECR_BACKEND_URI = '890571109462.dkr.ecr.ap-northeast-2.amazonaws.com/web-server-backend'
+        ECR_FRONTEND_URI = '890571109462.dkr.ecr.ap-northeast-2.amazonaws.com/web-server-frontend'
     }
 
     stages {
@@ -42,10 +42,8 @@ spec:
             steps {
                 // 이 단계는 모든 브랜치에서 실행됩니다.
                 container('node') {
-                    sh 'npm install'
-                    sh 'npx prisma generate'
+                    sh 'npm install --legacy-peer-deps'
                     sh 'npm run build'
-                    // 필요 시 여기에 'npm test'와 같은 테스트 명령어를 추가할 수 있습니다.
                 }
             }
         }
@@ -63,10 +61,10 @@ spec:
                         ecrLoginPassword = sh(script: "aws ecr get-login-password --region ${AWS_REGION}", returnStdout: true).trim()
                     }
                     container('podman') {
-                        sh "echo '${ecrLoginPassword}' | podman login --username AWS --password-stdin ${ECR_BACKEND_URI}"
+                        sh "echo '${ecrLoginPassword}' | podman login --username AWS --password-stdin ${ECR_FRONTEND_URI}"
                         
-                        def imageTag = "build-${BUILD_NUMBER}"
-                        def fullImageName = "${ECR_BACKEND_URI}:${imageTag}"
+                        def imageTag = "frontend-build-${BUILD_NUMBER}"
+                        def fullImageName = "${ECR_FRONTEND_URI}:${imageTag}"
                         
                         sh "podman build -t ${fullImageName} ."
                         sh "podman push ${fullImageName}"
