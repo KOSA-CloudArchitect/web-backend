@@ -10,18 +10,29 @@ spec:
   containers:
   - name: jnlp
     image: jenkins/inbound-agent:latest
-    args: ["\$(JENKINS_SECRET)", "\$(JENKINS_NAME)"]
+    args:
+    - "\$(JENKINS_SECRET)"
+    - "\$(JENKINS_NAME)"
   - name: node
     image: node:20-alpine
-    command: ["sleep"], args: ["infinity"]
+    command:
+    - sleep
+    args:
+    - infinity
   - name: podman
     image: quay.io/podman/stable
-    command: ["sleep"], args: ["infinity"]
+    command:
+    - sleep
+    args:
+    - infinity
     securityContext:
       privileged: true
   - name: aws-cli
     image: amazon/aws-cli:latest
-    command: ["sleep"], args: ["infinity"]
+    command:
+    - sleep
+    args:
+    - infinity
 """
         }
     }
@@ -38,9 +49,8 @@ spec:
             }
         }
 
-        stage('Build & Test (Verification)') {
+        stage('Build Application') {
             steps {
-                // 이 단계는 모든 브랜치에서 실행됩니다.
                 container('node') {
                     sh 'npm install --legacy-peer-deps'
                     sh 'npm run build'
@@ -48,14 +58,9 @@ spec:
             }
         }
 
-        // --- [수정] 'when' 조건을 추가하여 main 브랜치에서만 실행되도록 설정 ---
         stage('Build & Push Image') {
-            when {
-                branch 'main'
-            }
             steps {
                 script {
-                    echo "--- Running on main branch. Building and pushing image. ---"
                     def ecrLoginPassword
                     container('aws-cli') {
                         ecrLoginPassword = sh(script: "aws ecr get-login-password --region ${AWS_REGION}", returnStdout: true).trim()
