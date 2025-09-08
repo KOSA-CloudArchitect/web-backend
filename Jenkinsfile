@@ -1,56 +1,39 @@
+// Jenkinsfile
+
 pipeline {
     agent {
         kubernetes {
-            label 'podman-node-agent'
-            yaml """
-apiVersion: v1
-kind: Pod
-spec:
-  serviceAccountName: default
-  containers:
-  - name: jnlp
-    image: jenkins/inbound-agent:latest
-    args:
-    - "\$(JENKINS_SECRET)"
-    - "\$(JENKINS_NAME)"
-  - name: node
-    image: node:18-slim
-    command:
-    - sleep
-    args:
-    - infinity
-  - name: podman
-    image: quay.io/podman/stable
-    command:
-    - sleep
-    args:
-    - infinity
-    securityContext:
-      privileged: true
-  - name: aws-cli
-    image: amazon/aws-cli:latest
-    command:
-    - sleep
-    args:
-    - infinity
-"""
+            cloud 'kubernetes'
+            yamlFile 'pod-template.yaml'
         }
     }
 
     environment {
-        AWS_REGION = 'ap-northeast-2'
-        ECR_BACKEND_URI = '890571109462.dkr.ecr.ap-northeast-2.amazonaws.com/web-server-backend'
-        GITHUB_CREDENTIAL_ID = 'github-pat'
+        AWS_REGION      = 'ap-northeast-2'
+        ECR_REGISTRY    = '890571109462.dkr.ecr.ap-northeast-2.amazonaws.com'
+        ECR_REPOSITORY  = 'web-server-backend'
     }
 
     stages {
+        // =======================================================================
+        // 이 단계에서 UI 설정 대신 코드로 직접 Git Checkout을 수행합니다.
+        // =======================================================================
         stage('Checkout') {
             steps {
-                checkout scm
+                // Git checkout을 직접 정의하고, 사용할 인증서 ID를 코드에 명시합니다.
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: '*/develop']],
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/KOSA-CloudArchitect/web-backend.git',
+                        // UI 목록에 보이지 않더라도, ID로 직접 지정하면 정상 동작합니다.
+                        credentialsId: 'github-pat'
+                    ]]
+                ])
             }
         }
+        // =======================================================================
 
-        // develop 브랜치에서는 이 단계까지만 실행됩니다.
         stage('Build & Test') {
             steps {
                 container('node') {
@@ -61,22 +44,19 @@ spec:
             }
         }
 
-        // main 브랜치일 때만 이 단계를 실행합니다.
         stage('Build & Push Image') {
             when {
                 branch 'main'
             }
             steps {
                 script {
-                    def ecrLoginPassword
                     container('aws-cli') {
-                        ecrLoginPassword = sh(script: "aws ecr get-login-password --region ${AWS_REGION}", returnStdout: true).trim()
+                        sh "aws ecr get-login-password --region ${AWS_REGION} | podman login --username AWS --password-stdin ${ECR_REGISTRY}"
                     }
+                    
                     container('podman') {
-                        sh "echo '${ecrLoginPassword}' | podman login --username AWS --password-stdin ${ECR_BACKEND_URI}"
-                        
                         def imageTag = "build-${BUILD_NUMBER}"
-                        def fullImageName = "${ECR_BACKEND_URI}:${imageTag}"
+                        def fullImageName = "${ECR_REGISTRY}/${ECR_REPOSITORY}:${imageTag}"
                         
                         sh "podman build -t ${fullImageName} ."
                         sh "podman push ${fullImageName}"

@@ -1,0 +1,24 @@
+# pod-template.yaml
+
+apiVersion: v1
+kind: Pod
+spec:
+  # 이 Pod를 'core-on' 노드 그룹에만 할당하도록 지정
+  nodeSelector:
+    node-role: core
+  
+  containers:
+  - name: node
+    image: node:18-slim
+    command: ["sleep"]
+    args: ["infinity"]
+  - name: podman
+    image: quay.io/podman/stable
+    command: ["sleep"]
+    args: ["infinity"]
+    securityContext:
+      privileged: true
+  - name: aws-cli
+    image: amazon/aws-cli:latest
+    command: ["sleep"]
+    args: ["infinity"]
