@@ -4,7 +4,7 @@ pipeline {
     agent {
         kubernetes {
             cloud 'kubernetes'
-            yamlFile 'pod-template.yaml'
+            yamlFile 'pod-template.yaml' // Agent Pod의 설계도는 이 파일을 사용
         }
     }
 
@@ -15,24 +15,20 @@ pipeline {
     }
 
     stages {
-        // =======================================================================
-        // 이 단계에서 UI 설정 대신 코드로 직접 Git Checkout을 수행합니다.
-        // =======================================================================
         stage('Checkout') {
             steps {
-                // Git checkout을 직접 정의하고, 사용할 인증서 ID를 코드에 명시합니다.
+                // UI 설정 대신 코드로 직접 Git Checkout을 수행
                 checkout([
                     $class: 'GitSCM',
                     branches: [[name: '*/develop']],
                     userRemoteConfigs: [[
                         url: 'https://github.com/KOSA-CloudArchitect/web-backend.git',
-                        // UI 목록에 보이지 않더라도, ID로 직접 지정하면 정상 동작합니다.
+                        // UI 목록 버그와 상관없이 ID로 직접 지정
                         credentialsId: 'github-pat'
                     ]]
                 ])
             }
         }
-        // =======================================================================
 
         stage('Build & Test') {
             steps {
@@ -45,6 +41,7 @@ pipeline {
         }
 
         stage('Build & Push Image') {
+            // 'main' 브랜치일 때만 이 단계를 실행
             when {
                 branch 'main'
             }
