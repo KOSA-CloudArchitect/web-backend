@@ -4,7 +4,7 @@ pipeline {
     agent {
         kubernetes {
             cloud 'kubernetes'
-            yamlFile 'pod-template.yaml' // Agent Pod의 설계도는 이 파일을 사용
+            yamlFile 'pod-template.yaml'
         }
     }
 
@@ -17,16 +17,9 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                // UI 설정 대신 코드로 직접 Git Checkout을 수행
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: '*/develop']],
-                    userRemoteConfigs: [[
-                        url: 'https://github.com/KOSA-CloudArchitect/web-backend.git',
-                        // UI 목록 버그와 상관없이 ID로 직접 지정
-                        credentialsId: 'github-pat'
-                    ]]
-                ])
+                // checkout scm을 사용하여 젠킨스가 현재 빌드 중인 브랜치(main 또는 develop)를
+                // 자동으로 인식하게 합니다.
+                checkout scm
             }
         }
 
@@ -47,11 +40,15 @@ pipeline {
             }
             steps {
                 script {
-                    container('aws-cli') {
-                        sh "aws ecr get-login-password --region ${AWS_REGION} | podman login --username AWS --password-stdin ${ECR_REGISTRY}"
+                    // 1. aws-cli 컨테이너에서 ECR 비밀번호를 가져와 변수에 저장
+                    def ecrPassword = container('aws-cli') {
+                        sh(script: "aws ecr get-login-password --region ${AWS_REGION}", returnStdout: true).trim()
                     }
-                    
+
+                    // 2. podman 컨테이너에서 위 비밀번호를 사용하여 로그인하고 이미지를 푸시
                     container('podman') {
+                        sh "echo '${ecrPassword}' | podman login --username AWS --password-stdin ${ECR_REGISTRY}"
+
                         def imageTag = "build-${BUILD_NUMBER}"
                         def fullImageName = "${ECR_REGISTRY}/${ECR_REPOSITORY}:${imageTag}"
                         
