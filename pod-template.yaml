@@ -2,6 +2,8 @@
 
 apiVersion: v1
 kind: Pod
+metadata:
+  namespace: jenkins
 spec:
   # Pod를 'core-on' 노드 그룹에만 할당
   nodeSelector:
