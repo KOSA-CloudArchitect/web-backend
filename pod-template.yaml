@@ -11,7 +11,7 @@ spec:
     workload: core
   
   # ECR 접근 권한이 있는 서비스 계정 지정
-  serviceAccountName: jenkins-agent
+ #serviceAccountName: jenkins-agent
   
   containers:
   - name: node
