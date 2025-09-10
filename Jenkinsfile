@@ -31,6 +31,19 @@ pipeline {
             }
         }
 
+
+        stage('Debug Information') {
+            steps {
+                container('aws-cli') {
+                    sh '''
+                        echo "--- Checking AWS Identity INSIDE THE POD ---"
+                        aws sts get-caller-identity
+                    '''
+                }
+            }
+        }
+
+
         stage('Build & Push Image') {
             when {
                 branch 'main'
