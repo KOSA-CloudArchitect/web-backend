@@ -1,4 +1,4 @@
-// Jenkinsfile (최종 버전)
+// Jenkinsfile
 
 pipeline {
     agent {
@@ -37,15 +37,11 @@ pipeline {
             }
             steps {
                 script {
-                    // 1. aws-cli 컨테이너에서 ECR 비밀번호를 가져와 변수에 저장
-                    def ecrPassword = container('aws-cli') {
-                        sh(script: "aws ecr get-login-password --region ${AWS_REGION}", returnStdout: true).trim()
+                    container('aws-cli') {
+                        sh "aws ecr get-login-password --region ${AWS_REGION} | podman login --username AWS --password-stdin ${ECR_REGISTRY}"
                     }
-
-                    // 2. podman 컨테이너에서 위 비밀번호를 사용하여 로그인하고 이미지를 푸시
+                    
                     container('podman') {
-                        sh "echo '${ecrPassword}' | podman login --username AWS --password-stdin ${ECR_REGISTRY}"
-
                         def imageTag = "build-${BUILD_NUMBER}"
                         def fullImageName = "${ECR_REGISTRY}/${ECR_REPOSITORY}:${imageTag}"
                         
