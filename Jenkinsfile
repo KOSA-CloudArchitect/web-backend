@@ -10,7 +10,7 @@ pipeline {
 
     environment {
         AWS_REGION      = 'ap-northeast-2'
-        ECR_REGISTRY    = '890571109462.dkr.ecr.ap-northeast-2.amazonaws.com'
+        ECR_REGISTRY    = '150297826798.dkr.ecr.ap-northeast-2.amazonaws.com'
         ECR_REPOSITORY  = 'web-server-backend'
     }
 
