@@ -1,4 +1,4 @@
-// Jenkinsfile for web-backend CI/CD
+// Jenkinsfile for web-backend CI/CD 디스코드 알림추가 
 
 pipeline {
     agent {
