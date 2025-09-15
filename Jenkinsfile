@@ -117,7 +117,7 @@ pipeline {
                 link: env.BUILD_URL,
                 result: currentBuild.currentResult,
                 title: "Backend Jenkins Job",
-                webhookURL: "your-discord-webhook-url" // 실제 Webhook URL로 변경하세요
+                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa" // 실제 Webhook URL로 변경하세요
             )
         }
         failure {
@@ -127,7 +127,7 @@ pipeline {
                 link: env.BUILD_URL,
                 result: currentBuild.currentResult,
                 title: "Backend Jenkins Job",
-                webhookURL: "your-discord-webhook-url" // 실제 Webhook URL로 변경하세요
+                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa" // 실제 Webhook URL로 변경하세요
             )
         }
     }
