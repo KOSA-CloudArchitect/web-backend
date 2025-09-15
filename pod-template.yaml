@@ -1,0 +1,28 @@
+# pod-template.yaml
+
+apiVersion: v1
+kind: Pod
+spec:
+  # 팀에서 논의된 nodeSelector로 수정
+  nodeSelector:
+    capacity-type: on-demand
+    workload: core
+  
+  # ECR 접근 권한이 있는 서비스 계정 지정
+  serviceAccountName: jenkins-agent
+  
+  containers:
+  - name: node
+    image: node:18-slim
+    command: ["sleep"]
+    args: ["infinity"]
+  - name: podman
+    image: quay.io/podman/stable
+    command: ["sleep"]
+    args: ["infinity"]
+    securityContext:
+      privileged: true
+  - name: aws-cli
+    image: amazon/aws-cli:latest
+    command: ["sleep"]
+    args: ["infinity"]
