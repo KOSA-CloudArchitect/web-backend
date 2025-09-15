@@ -9,7 +9,7 @@
 - Node.js 16 이상
 - PostgreSQL 12 이상
 - Redis 6 이상 (캐싱용)
-- npm 또는 yarn 1
+- npm 또는 yarn (테스트용 수정)
 
 ### 환경 설정
 
