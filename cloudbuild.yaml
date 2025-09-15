@@ -1,0 +1,60 @@
+steps:
+  # Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '-t', 'gcr.io/$PROJECT_ID/kosa-backend:$COMMIT_SHA',
+      '-t', 'gcr.io/$PROJECT_ID/kosa-backend:latest',
+      '.'
+    ]
+
+  # Push the Docker image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'push',
+      'gcr.io/$PROJECT_ID/kosa-backend:$COMMIT_SHA'
+    ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'push',
+      'gcr.io/$PROJECT_ID/kosa-backend:latest'
+    ]
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'kosa-backend'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/kosa-backend:$COMMIT_SHA'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--port'
+      - '8080'
+      - '--memory'
+      - '512Mi'
+      - '--cpu'
+      - '1'
+      - '--max-instances'
+      - '10'
+      - '--min-instances'
+      - '0'
+      - '--timeout'
+      - '300'
+      - '--set-env-vars'
+      - 'NODE_ENV=production'
+      - '--update-env-vars'
+      - 'ALLOWED_ORIGINS=https://your-frontend-domain.com'
+
+# Store Docker images in Container Registry
+images:
+  - 'gcr.io/$PROJECT_ID/kosa-backend:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/kosa-backend:latest'
+
+# Build timeout
+timeout: '1200s'

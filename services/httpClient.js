@@ -1,5 +1,5 @@
 const axios = require('axios');
-const axiosRetry = require('axios-retry').default;
+const axiosRetry = require('axios-retry');
 const CircuitBreaker = require('opossum');
 const { Sentry } = require('../config/sentry');
 
@@ -12,26 +12,13 @@ class HttpClient {
 
   createAxiosInstance() {
     const client = axios.create({
-      baseURL: process.env.ANALYSIS_SERVER_URL || 'http://localhost:30800',
-      timeout: parseInt(process.env.HTTP_TIMEOUT || '120000'),
+      baseURL: process.env.ANALYSIS_SERVER_URL || 'http://localhost:5000',
+      timeout: parseInt(process.env.HTTP_TIMEOUT || '30000'),
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': 'KOSA-Backend/1.0.0',
       },
     });
-
-    // 크롤링 서버용 별도 클라이언트 생성
-    this.crawlerClient = axios.create({
-      baseURL: process.env.CRAWLING_SERVER_URL || 'http://localhost:30900',
-      timeout: parseInt(process.env.HTTP_TIMEOUT || '120000'),
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'KOSA-Backend/1.0.0',
-      },
-    });
-
-    // 크롤링 서버 클라이언트에도 인터셉터 적용
-    this.setupCrawlerInterceptors();
 
     // Request interceptor for Bearer token
     client.interceptors.request.use(
@@ -119,7 +106,7 @@ class HttpClient {
 
   createCircuitBreaker() {
     const options = {
-      timeout: parseInt(process.env.CIRCUIT_BREAKER_TIMEOUT || '120000'),
+      timeout: parseInt(process.env.CIRCUIT_BREAKER_TIMEOUT || '30000'),
       errorThresholdPercentage: parseInt(process.env.CIRCUIT_BREAKER_ERROR_THRESHOLD || '50'),
       resetTimeout: parseInt(process.env.CIRCUIT_BREAKER_RESET_TIMEOUT || '60000'),
     };
@@ -180,107 +167,6 @@ class HttpClient {
       Sentry.withScope((scope) => {
         scope.setTag('status_check_failed', true);
         scope.setContext('status_check', { taskId });
-        Sentry.captureException(error);
-      });
-
-      throw error;
-    }
-  }
-
-  setupCrawlerInterceptors() {
-    // Request interceptor for crawler client
-    this.crawlerClient.interceptors.request.use(
-      (config) => {
-        const token = process.env.CRAWLING_SERVER_TOKEN;
-        if (token) {
-          config.headers.Authorization = `Bearer ${token}`;
-        }
-        
-        console.log(`🕷️ Crawler Request: ${config.method?.toUpperCase()} ${config.url}`);
-        return config;
-      },
-      (error) => {
-        console.error('❌ Crawler request interceptor error:', error);
-        Sentry.captureException(error);
-        return Promise.reject(error);
-      }
-    );
-
-    // Response interceptor for crawler client
-    this.crawlerClient.interceptors.response.use(
-      (response) => {
-        console.log(`✅ Crawler Response: ${response.status} ${response.config.url}`);
-        return response;
-      },
-      (error) => {
-        const status = error.response?.status;
-        const url = error.config?.url;
-        
-        console.error(`❌ Crawler Error: ${status} ${url}`, {
-          message: error.message,
-          status,
-          data: error.response?.data,
-        });
-
-        Sentry.withScope((scope) => {
-          scope.setTag('crawler_error', true);
-          scope.setContext('crawler_request', {
-            url,
-            method: error.config?.method,
-            status,
-          });
-          Sentry.captureException(error);
-        });
-
-        return Promise.reject(error);
-      }
-    );
-  }
-
-  async requestProductSearch(request) {
-    try {
-      console.log(`🕷️ Requesting product search from crawler:`, {
-        keyword: request.keyword,
-        maxLinks: request.max_links,
-        crawlerUrl: process.env.CRAWLING_SERVER_URL || 'http://localhost:30900'
-      });
-
-      // 크롤링 서버의 info_list 엔드포인트 호출
-      const response = await this.crawlerClient.post('/info_list', request);
-      
-      console.log(`✅ Crawler response received:`, {
-        status: response.status,
-        dataKeys: Object.keys(response.data || {}),
-        hasInfoList: !!(response.data?.info_list)
-      });
-
-      return response.data;
-    } catch (error) {
-      console.error('❌ Product search request failed:', error);
-      
-      // 상세한 오류 정보 로깅
-      if (error.code === 'ECONNREFUSED') {
-        console.error(`❌ Cannot connect to crawler server: ${process.env.CRAWLING_SERVER_URL || 'http://localhost:30900'}`);
-      } else if (error.code === 'ETIMEDOUT') {
-        console.error(`❌ Crawler server timeout: ${process.env.CRAWLING_SERVER_URL || 'http://localhost:30900'}`);
-      } else if (error.response) {
-        console.error(`❌ Crawler server error response:`, {
-          status: error.response.status,
-          statusText: error.response.statusText,
-          data: error.response.data
-        });
-      }
-      
-      // Enhanced error context for Sentry
-      Sentry.withScope((scope) => {
-        scope.setTag('product_search_failed', true);
-        scope.setContext('search_request', {
-          keyword: request.keyword,
-          maxLinks: request.max_links,
-          crawlerUrl: process.env.CRAWLING_SERVER_URL,
-          errorCode: error.code,
-          errorStatus: error.response?.status
-        });
         Sentry.captureException(error);
       });
 

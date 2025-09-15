@@ -89,7 +89,7 @@ router.get('/', async (req, res) => {
           { keyword: searchTerm, max_links: parseInt(max_links) },
           { 
             headers: { 'Content-Type': 'application/json' }, 
-            timeout: 30000,  // 30초로 단축
+            timeout: parseInt(process.env.HTTP_TIMEOUT || '200000'),  // 환경변수에서 타임아웃 설정
             validateStatus: function (status) {
               return status < 600; // 504 Gateway Timeout도 허용
             }
@@ -756,7 +756,7 @@ async function performCrawling(jobId, keyword, max_links) {
     const response = await axios.post(
       crawlingEndpoint,
       { keyword, max_links },
-      { headers: { 'Content-Type': 'application/json' }, timeout: 30000 }
+      { headers: { 'Content-Type': 'application/json' }, timeout: parseInt(process.env.HTTP_TIMEOUT || '200000') }
     );
 
     console.log(`📝 크롤링 응답 받음: ${jobId} - 상태: ${response.status}`);
