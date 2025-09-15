@@ -380,4 +380,4 @@ curl http://localhost:3001/api/analyze/cache/stats
 
 # 특정 상품 캐시 무효화
 curl -X DELETE http://localhost:3001/api/analyze/cache/product-123
-```
+```# Test for Jenkins reactivation
