@@ -1,4 +1,4 @@
-// Jenkinsfile for web-backend CI/CD 디스코드 알림추가 
+// Jenkinsfile for web-backend CI/CD with branch-specific logic and Discord notifications
 
 pipeline {
     agent {
@@ -24,6 +24,7 @@ pipeline {
         }
 
         stage('Build & Test') {
+            // This stage runs for all branches
             steps {
                 container('node') {
                     sh 'npm install'
@@ -34,17 +35,16 @@ pipeline {
         }
 
         stage('Build & Push Image') {
+            // This stage runs ONLY for the 'main' branch
             when {
                 branch 'main'
             }
             steps {
                 script {
-                    // Git 커밋 해시를 이미지 태그로 사용하고 환경 변수 설정
                     env.COMMIT_HASH = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                     env.GITHUB_COMMIT_URL = "${env.GITHUB_REPO}/commit/${env.COMMIT_HASH}"
                     env.FULL_IMAGE_NAME = "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}:${env.COMMIT_HASH}"
 
-                    // ECR 로그인
                     def ecrPassword = container('aws-cli') {
                         withCredentials([aws(credentialsId: 'aws-credentials-manual-test')]) {
                             return sh(
@@ -54,7 +54,6 @@ pipeline {
                         }
                     }
 
-                    // 이미지 빌드 및 푸시
                     container('podman') {
                         sh "echo '${ecrPassword}' | podman login --username AWS --password-stdin ${env.ECR_REGISTRY}"
                         sh "podman build -t ${env.FULL_IMAGE_NAME} ."
@@ -67,29 +66,44 @@ pipeline {
         }
 
         stage('Update Infra Repository') {
+            // This stage runs ONLY for the 'main' branch
             when {
                 branch 'main'
             }
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'github-ssh-key', keyFileVariable: 'SSH_KEY')]) {
-                    sh """
-                        export GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes"
-
-                        mkdir -p ~/.ssh
-                        echo "Host github.com\n  StrictHostKeyChecking no" > ~/.ssh/config
-
+                    // This script is the final, compatible version
+                    sh '''
+                        # Configure Git to use the provided SSH key without host key checking
+                        export GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+                        
+                        # Clone the infra repository into a separate directory
                         git clone ${env.INFRA_REPO_URL} infra_repo
                         cd infra_repo
 
-                        mkdir -p image
-                        echo "${env.FULL_IMAGE_NAME}" > image/web-backend.txt
-
-                        git config user.email "jenkins@your-domain.com"
+                        # Configure Git user for the commit
+                        git config user.email "jenkins-ci@example.com"
                         git config user.name "Jenkins CI"
-                        git add image/web-backend.txt
-                        git commit -m "Update web-backend image to ${env.FULL_IMAGE_NAME}"
+
+                        # 1. Write the new image tag to a text file for record-keeping
+                        mkdir -p image
+                        echo "${env.COMMIT_HASH}" > image/web-backend.txt
+                        
+                        # 2. Define the path to the kustomization file
+                        KUSTOMIZE_FILE="kubernetes/namespaces/web-tier,cache-tier/04-applications/kustomization.yaml"
+                        
+                        # 3. Use the fully compatible sed command to update the newTag value
+                        sed -i 's/newTag: .*/newTag: "${env.COMMIT_HASH}"/' ${KUSTOMIZE_FILE}
+                        
+                        echo "kustomization.yaml newTag updated to ${env.COMMIT_HASH}"
+
+                        # 4. Add both the text file and kustomization.yaml to the commit
+                        git add image/web-backend.txt ${KUSTOMIZE_FILE}
+                        
+                        # 5. Commit the changes with a descriptive message
+                        git commit -m "Update backend image tag to ${env.COMMIT_HASH}"
                         git push origin main
-                    """
+                    '''
                 }
             }
         }
@@ -98,22 +112,22 @@ pipeline {
     post {
         success {
             discordSend(
-                description: "✅ Backend CI/CD 파이프라인 성공!",
-                footer: "빌드 번호: ${env.BUILD_NUMBER} | 이미지: ${env.FULL_IMAGE_NAME}",
+                description: "✅ Backend CI/CD Pipeline Succeeded! [Branch: ${env.BRANCH_NAME}]",
+                footer: "Build Number: ${env.BUILD_NUMBER} | Image: ${env.FULL_IMAGE_NAME}",
                 link: env.BUILD_URL,
                 result: currentBuild.currentResult,
-                title: "백엔드 Jenkins Job",
-                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa"
+                title: "Backend Jenkins Job",
+                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa" // 실제 Webhook URL로 변경하세요
             )
         }
         failure {
             discordSend(
-                description: "❌ Backend CI/CD 파이프라인 실패!",
-                footer: "빌드 번호: ${env.BUILD_NUMBER}",
+                description: "❌ Backend CI/CD Pipeline Failed! [Branch: ${env.BRANCH_NAME}]",
+                footer: "Build Number: ${env.BUILD_NUMBER}",
                 link: env.BUILD_URL,
                 result: currentBuild.currentResult,
-                title: "백엔드 Jenkins Job",
-                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa"
+                title: "Backend Jenkins Job",
+                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa" // 실제 Webhook URL로 변경하세요
             )
         }
     }
