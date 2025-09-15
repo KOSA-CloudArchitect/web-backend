@@ -70,7 +70,7 @@ pipeline {
             }
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'github-ssh-key', keyFileVariable: 'SSH_KEY')]) {
-                    sh(script: '''
+                    sh '''
                         #!/bin/bash
                         set -e
 
@@ -103,7 +103,7 @@ pipeline {
                         # 5. Commit the changes with a descriptive message
                         git commit -m "Update backend image tag to $COMMIT_HASH" || echo "No changes to commit"
                         git push origin main
-                    ''', shell: '/bin/bash')
+                    '''
                 }
             }
         }
