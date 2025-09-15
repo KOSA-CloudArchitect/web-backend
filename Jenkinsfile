@@ -72,7 +72,8 @@ pipeline {
             }
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'github-ssh-key', keyFileVariable: 'SSH_KEY')]) {
-                    sh """
+                    // ✅ Groovy/Shell 변수 충돌을 막기 위해 작은따옴표 세 개로 변경
+                    sh '''
                         # --- 기본 Git 설정 ---
                         export GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes"
                         mkdir -p ~/.ssh
@@ -86,32 +87,31 @@ pipeline {
                         git config user.email "jenkins@your-domain.com"
                         git config user.name "Jenkins CI"
 
-                        # ✅ 1. 참조용으로 web-backend.txt 파일에 새 이미지 태그 기록
+                        # 1. 참조용으로 web-backend.txt 파일에 새 이미지 태그 기록
                         mkdir -p image
                         echo "${env.COMMIT_HASH}" > image/web-backend.txt
                         
-                        # ✅ 2. Kustomization 파일 경로 변수 지정
+                        # 2. Kustomization 파일 경로 변수 지정
                         KUSTOMIZE_FILE="kubernetes/namespaces/web-tier,cache-tier/04-applications/kustomization.yaml"
                         
-                        # ✅ 3. sed 명령어로 kustomization.yaml의 newTag 값을 새 태그로 교체
+                        # 3. sed 명령어로 kustomization.yaml의 newTag 값을 새 태그로 교체
                         sed -i "s/newTag: .*/newTag: \\"${env.COMMIT_HASH}\\"/" ${KUSTOMIZE_FILE}
                         
                         echo "kustomization.yaml newTag updated to ${env.COMMIT_HASH}"
 
-                        # ✅ 4. 변경된 두 파일(txt, yaml)을 모두 Git에 추가
+                        # 4. 변경된 두 파일(txt, yaml)을 모두 Git에 추가
                         git add image/web-backend.txt ${KUSTOMIZE_FILE}
                         
-                        # ✅ 5. 커밋 메시지를 새 태그 기준으로 작성
+                        # 5. 커밋 메시지를 새 태그 기준으로 작성
                         git commit -m "Update backend image tag to ${env.COMMIT_HASH}"
                         git push origin main
-                    """
+                    '''
                 }
             }
         }
     }
 
     post {
-        // (post 섹션은 변경사항 없음)
         success {
             discordSend(
                 description: "✅ Backend CI/CD 파이프라인 성공!",

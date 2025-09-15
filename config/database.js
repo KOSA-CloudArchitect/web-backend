@@ -5,7 +5,7 @@ let pool = null;
 
 function getPool() {
   if (!pool) {
-    const config = {
+    pool = new Pool({
       host: process.env.DB_HOST || 'localhost',
       port: parseInt(process.env.DB_PORT || '5432'),
       database: process.env.DB_NAME || 'kosa',
@@ -14,14 +14,7 @@ function getPool() {
       max: parseInt(process.env.DB_POOL_MAX || '20'),
       idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT || '30000'),
       connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT || '2000'),
-    };
-
-    // RDS 연결 시 SSL 설정 추가
-    if (process.env.DB_HOST && process.env.DB_HOST.includes('rds.amazonaws.com')) {
-      config.ssl = { rejectUnauthorized: false };
-    }
-
-    pool = new Pool(config);
+    });
 
     // Log database connection events
     pool.on('connect', () => {
