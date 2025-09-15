@@ -1,7 +1,7 @@
 const fetch = require('node-fetch');
 const { AbortController } = require('node-fetch');
 
-async function fetchInfoList({ keyword, max_links = 10, timeout = 30000 }) {
+async function fetchInfoList({ keyword, max_links = 10, timeout = parseInt(process.env.HTTP_TIMEOUT || '200000') }) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   

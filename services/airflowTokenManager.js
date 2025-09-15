@@ -54,7 +54,7 @@ class AirflowTokenManager {
           headers: {
             'Content-Type': 'application/json',
           },
-          timeout: 30000, // 30초 타임아웃
+          timeout: parseInt(process.env.HTTP_TIMEOUT || '200000'), // 환경변수에서 타임아웃 설정
         }
       );
 

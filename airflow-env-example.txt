@@ -1,0 +1,46 @@
+# Airflow Environment Variables Example
+# Copy this file to .env and update the values
+
+# Airflow Core Settings
+AIRFLOW__CORE__EXECUTOR=LocalExecutor
+AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
+AIRFLOW__CORE__LOAD_EXAMPLES=false
+AIRFLOW__CORE__FERNET_KEY=your-fernet-key-here
+
+# Database Settings
+AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@localhost:5432/airflow
+
+# Web Server Settings
+AIRFLOW__WEBSERVER__EXPOSE_CONFIG=true
+AIRFLOW__WEBSERVER__SECRET_KEY=your-secret-key-here
+
+# API Settings
+AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
+
+# Admin User
+_AIRFLOW_DB_UPGRADE=true
+_AIRFLOW_WWW_USER_CREATE=true
+_AIRFLOW_WWW_USER_USERNAME=admin
+_AIRFLOW_WWW_USER_PASSWORD=admin
+_AIRFLOW_WWW_USER_EMAIL=admin@example.com
+_AIRFLOW_WWW_USER_FIRSTNAME=Admin
+_AIRFLOW_WWW_USER_LASTNAME=User
+_AIRFLOW_WWW_USER_ROLE=Admin
+
+# KOSA Backend Integration
+KOSA_BACKEND_URL=http://localhost:3001
+KOSA_BACKEND_API_KEY=your-api-key-here
+
+# Kafka Settings
+KAFKA_BROKERS=localhost:9092
+KAFKA_TOPIC_ANALYSIS_REQUESTS=analysis-requests
+KAFKA_TOPIC_ANALYSIS_RESULTS=analysis-results
+
+# Redis Settings
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+
+# Logging
+AIRFLOW__LOGGING__LOGGING_LEVEL=INFO
+AIRFLOW__LOGGING__LOGGING_CONFIG_CLASS=airflow.config_templates.airflow_local_settings.LOGGING_CONFIG
