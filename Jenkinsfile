@@ -24,6 +24,7 @@ pipeline {
         }
 
         stage('Build & Test') {
+            // This stage runs for all branches
             steps {
                 container('node') {
                     sh 'npm install'
@@ -34,7 +35,7 @@ pipeline {
         }
 
         stage('Build & Push Image') {
-            // main 브랜치에서만 실행
+            // This stage runs ONLY for the 'main' branch
             when {
                 branch 'main'
             }
@@ -65,41 +66,41 @@ pipeline {
         }
 
         stage('Update Infra Repository') {
-            // main 브랜치에서만 실행
+            // This stage runs ONLY for the 'main' branch
             when {
                 branch 'main'
             }
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'github-ssh-key', keyFileVariable: 'SSH_KEY')]) {
-                    // 쉘 호환성 문제를 모두 해결한 최종 스크립트
+                    // This script is the final, compatible version
                     sh '''
-                        # Git SSH 설정
+                        # Configure Git to use the provided SSH key without host key checking
                         export GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
                         
-                        # infra 리포지토리 클론
+                        # Clone the infra repository into a separate directory
                         git clone ${env.INFRA_REPO_URL} infra_repo
                         cd infra_repo
 
-                        # Git 사용자 정보 설정
+                        # Configure Git user for the commit
                         git config user.email "jenkins-ci@example.com"
                         git config user.name "Jenkins CI"
 
-                        # 1. 기록용 텍스트 파일 업데이트
+                        # 1. Write the new image tag to a text file for record-keeping
                         mkdir -p image
                         echo "${env.COMMIT_HASH}" > image/web-backend.txt
                         
-                        # 2. Kustomization 파일 경로 정의
+                        # 2. Define the path to the kustomization file
                         KUSTOMIZE_FILE="kubernetes/namespaces/web-tier,cache-tier/04-applications/kustomization.yaml"
                         
-                        # 3. 호환성이 높은 sed 명령어로 newTag 값 수정
+                        # 3. Use the fully compatible sed command to update the newTag value
                         sed -i 's/newTag: .*/newTag: "${env.COMMIT_HASH}"/' ${KUSTOMIZE_FILE}
                         
                         echo "kustomization.yaml newTag updated to ${env.COMMIT_HASH}"
 
-                        # 4. 변경된 파일들을 Git에 추가
+                        # 4. Add both the text file and kustomization.yaml to the commit
                         git add image/web-backend.txt ${KUSTOMIZE_FILE}
                         
-                        # 5. 변경사항 커밋 및 푸시
+                        # 5. Commit the changes with a descriptive message
                         git commit -m "Update backend image tag to ${env.COMMIT_HASH}"
                         git push origin main
                     '''
@@ -116,7 +117,7 @@ pipeline {
                 link: env.BUILD_URL,
                 result: currentBuild.currentResult,
                 title: "Backend Jenkins Job",
-                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa" // 실제 Webhook URL로 변경하세요
+                webhookURL: "your-discord-webhook-url" // 실제 Webhook URL로 변경하세요
             )
         }
         failure {
@@ -126,7 +127,7 @@ pipeline {
                 link: env.BUILD_URL,
                 result: currentBuild.currentResult,
                 title: "Backend Jenkins Job",
-                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa" // 실제 Webhook URL로 변경하세요
+                webhookURL: "your-discord-webhook-url" // 실제 Webhook URL로 변경하세요
             )
         }
     }
