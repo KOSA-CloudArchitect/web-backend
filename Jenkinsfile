@@ -1,4 +1,4 @@
-// Jenkinsfile for web-backend CI/CD with branch-specific logic and Discord notifications
+// Jenkinsfile for web-backend CI/CD with branch-specific logic and Discord notifications (Final Corrected Version)
 
 pipeline {
     agent {
@@ -40,12 +40,10 @@ pipeline {
             }
             steps {
                 script {
-                    // Git 커밋 해시를 이미지 태그로 사용
                     env.COMMIT_HASH = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                     env.GITHUB_COMMIT_URL = "${env.GITHUB_REPO}/commit/${env.COMMIT_HASH}"
                     env.FULL_IMAGE_NAME = "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}:${env.COMMIT_HASH}"
 
-                    // ECR 로그인
                     def ecrPassword = container('aws-cli') {
                         withCredentials([aws(credentialsId: 'aws-credentials-manual-test')]) {
                             return sh(
@@ -55,7 +53,6 @@ pipeline {
                         }
                     }
 
-                    // 이미지 빌드 및 푸시
                     container('podman') {
                         sh "echo '${ecrPassword}' | podman login --username AWS --password-stdin ${env.ECR_REGISTRY}"
                         sh "podman build -t ${env.FULL_IMAGE_NAME} ."
@@ -74,7 +71,7 @@ pipeline {
             }
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'github-ssh-key', keyFileVariable: 'SSH_KEY')]) {
-                    // 쉘 호환성 문제를 해결한 최종 스크립트
+                    // 쉘 호환성 문제를 모두 해결한 최종 스크립트
                     sh '''
                         # Git SSH 설정
                         export GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
@@ -94,7 +91,7 @@ pipeline {
                         # 2. Kustomization 파일 경로 정의
                         KUSTOMIZE_FILE="kubernetes/namespaces/web-tier,cache-tier/04-applications/kustomization.yaml"
                         
-                        # 3. sed 명령어로 newTag 값 수정
+                        # 3. 호환성이 높은 sed 명령어로 newTag 값 수정
                         sed -i 's/newTag: .*/newTag: "${env.COMMIT_HASH}"/' ${KUSTOMIZE_FILE}
                         
                         echo "kustomization.yaml newTag updated to ${env.COMMIT_HASH}"
