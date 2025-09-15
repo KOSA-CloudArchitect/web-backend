@@ -95,7 +95,7 @@ pipeline {
                         KUSTOMIZE_FILE="kubernetes/namespaces/web-tier,cache-tier/04-applications/kustomization.yaml"
                         
                         # 3. sed 명령어로 kustomization.yaml의 newTag 값을 새 태그로 교체
-                        sed -i "s/newTag: .*/newTag: \\"${env.COMMIT_HASH}\\"/" ${KUSTOMIZE_FILE}
+                        sed -i "s/newTag: .*/newTag: "${env.COMMIT_HASH}"/' ${KUSTOMIZE_FILE}
                         
                         echo "kustomization.yaml newTag updated to ${env.COMMIT_HASH}"
 
