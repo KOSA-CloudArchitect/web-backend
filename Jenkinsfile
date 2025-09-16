@@ -1,6 +1,7 @@
 // Jenkinsfile for web-backend CI/CD with branch-specific logic and Discord notifications
-
+// build test 
 pipeline {
+
     agent {
         kubernetes {
             cloud 'kubernetes'
@@ -24,7 +25,6 @@ pipeline {
         }
 
         stage('Build & Test') {
-            // This stage runs for all branches
             steps {
                 container('node') {
                     sh 'npm install'
@@ -35,7 +35,6 @@ pipeline {
         }
 
         stage('Build & Push Image') {
-            // This stage runs ONLY for the 'main' branch
             when {
                 branch 'main'
             }
@@ -66,19 +65,20 @@ pipeline {
         }
 
         stage('Update Infra Repository') {
-            // This stage runs ONLY for the 'main' branch
             when {
                 branch 'main'
             }
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'github-ssh-key', keyFileVariable: 'SSH_KEY')]) {
-                    // This script is the final, compatible version
                     sh '''
+                        #!/bin/bash
+                        set -e
+
                         # Configure Git to use the provided SSH key without host key checking
-                        export GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
-                        
+                        export GIT_SSH_COMMAND="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+
                         # Clone the infra repository into a separate directory
-                        git clone ${env.INFRA_REPO_URL} infra_repo
+                        git clone $INFRA_REPO_URL infra_repo
                         cd infra_repo
 
                         # Configure Git user for the commit
@@ -87,21 +87,21 @@ pipeline {
 
                         # 1. Write the new image tag to a text file for record-keeping
                         mkdir -p image
-                        echo "${env.COMMIT_HASH}" > image/web-backend.txt
-                        
+                        echo "$COMMIT_HASH" > image/web-backend.txt
+
                         # 2. Define the path to the kustomization file
                         KUSTOMIZE_FILE="kubernetes/namespaces/web-tier,cache-tier/04-applications/kustomization.yaml"
-                        
-                        # 3. Use the fully compatible sed command to update the newTag value
-                        sed -i 's/newTag: .*/newTag: "${env.COMMIT_HASH}"/' ${KUSTOMIZE_FILE}
-                        
-                        echo "kustomization.yaml newTag updated to ${env.COMMIT_HASH}"
+
+                        # 3. Use sed to update the newTag value
+                        sed -i "s/newTag: .*/newTag: $COMMIT_HASH/" $KUSTOMIZE_FILE
+
+                        echo "kustomization.yaml newTag updated to $COMMIT_HASH"
 
                         # 4. Add both the text file and kustomization.yaml to the commit
-                        git add image/web-backend.txt ${KUSTOMIZE_FILE}
-                        
+                        git add image/web-backend.txt $KUSTOMIZE_FILE
+
                         # 5. Commit the changes with a descriptive message
-                        git commit -m "Update backend image tag to ${env.COMMIT_HASH}"
+                        git commit -m "Update backend image tag to $COMMIT_HASH" || echo "No changes to commit"
                         git push origin main
                     '''
                 }
@@ -117,7 +117,7 @@ pipeline {
                 link: env.BUILD_URL,
                 result: currentBuild.currentResult,
                 title: "Backend Jenkins Job",
-                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa" // 실제 Webhook URL로 변경하세요
+                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa"
             )
         }
         failure {
@@ -127,8 +127,9 @@ pipeline {
                 link: env.BUILD_URL,
                 result: currentBuild.currentResult,
                 title: "Backend Jenkins Job",
-                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa" // 실제 Webhook URL로 변경하세요
+                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa"
             )
         }
     }
 }
+
