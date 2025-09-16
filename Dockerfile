@@ -13,6 +13,9 @@ RUN npm install
 # Bundle app source
 COPY . .
 
+# Generate Prisma client
+RUN npx prisma generate
+
 # Create a non-root user
 
 # Expose the port the app runs on

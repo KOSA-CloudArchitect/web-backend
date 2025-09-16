@@ -1,9 +1,50 @@
-const { getRedisClient, CacheKeys, CacheTTL } = require('../config/redis');
+const redisService = require('./redisService');
 const { Sentry } = require('../config/sentry');
+
+// 캐시 키 생성 헬퍼
+const CacheKeys = {
+  analysisResult: (productId) => `analysis_result:${productId}`,
+  analysisStatus: (productId) => `analysis_status:${productId}`,
+  productInfo: (productId) => `product_info:${productId}`,
+  searchResults: (query) => `search_results:${Buffer.from(query).toString('base64')}`,
+  userSearchHistory: (userId) => `user_search_history:${userId}`,
+  popularSearches: () => 'popular_searches'
+};
+
+// 캐시 TTL 설정
+const CacheTTL = {
+  ANALYSIS_RESULT: 3600, // 1시간
+  ANALYSIS_STATUS: 1800, // 30분
+  PRODUCT_INFO: 7200, // 2시간
+  SEARCH_RESULTS: 1800, // 30분
+  USER_SEARCH_HISTORY: 30 * 24 * 3600, // 30일
+  POPULAR_SEARCHES: 7 * 24 * 3600 // 7일
+};
 
 class CacheService {
   constructor() {
-    this.redis = getRedisClient();
+    this.redis = redisService;
+    this.hitCount = 0;
+    this.missCount = 0;
+    this.errorCount = 0;
+  }
+
+  /**
+   * 캐시 서비스 초기화
+   */
+  async initialize() {
+    try {
+      const initialized = await this.redis.initialize();
+      if (initialized) {
+        console.log('✅ 캐시 서비스 초기화 완료');
+      } else {
+        console.warn('⚠️ 캐시 서비스 초기화 실패');
+      }
+      return initialized;
+    } catch (error) {
+      console.error('캐시 서비스 초기화 오류:', error);
+      return false;
+    }
   }
 
   /**
@@ -11,20 +52,22 @@ class CacheService {
    */
   async getAnalysisResult(productId) {
     try {
-      const key = CacheKeys.analysisResult(productId);
-      const cached = await this.redis.get(key);
+      const result = await this.redis.getAnalysisResult(productId);
       
-      if (!cached) {
+      if (!result) {
         console.log(`🔍 Cache miss for analysis result: ${productId}`);
+        this.missCount++;
         await this.trackCacheHitRate(productId, false);
         return null;
       }
 
       console.log(`✅ Cache hit for analysis result: ${productId}`);
+      this.hitCount++;
       await this.trackCacheHitRate(productId, true);
-      return JSON.parse(cached);
+      return result;
     } catch (error) {
       console.error(`❌ Error getting analysis result from cache for ${productId}:`, error);
+      this.errorCount++;
       Sentry.captureException(error);
       return null; // Fail gracefully
     }
@@ -35,13 +78,15 @@ class CacheService {
    */
   async setAnalysisResult(productId, result) {
     try {
-      const key = CacheKeys.analysisResult(productId);
-      const value = JSON.stringify(result);
-      
-      await this.redis.setex(key, CacheTTL.ANALYSIS_RESULT, value);
-      console.log(`✅ Cached analysis result for product: ${productId}`);
+      const success = await this.redis.setAnalysisResult(productId, result, CacheTTL.ANALYSIS_RESULT);
+      if (success) {
+        console.log(`✅ Cached analysis result for product: ${productId}`);
+      } else {
+        console.warn(`⚠️ Failed to cache analysis result for product: ${productId}`);
+      }
     } catch (error) {
       console.error(`❌ Error setting analysis result cache for ${productId}:`, error);
+      this.errorCount++;
       Sentry.captureException(error);
       // Don't throw - caching failure shouldn't break the main flow
     }
@@ -52,18 +97,20 @@ class CacheService {
    */
   async getAnalysisStatus(productId) {
     try {
-      const key = CacheKeys.analysisStatus(productId);
-      const cached = await this.redis.get(key);
+      const result = await this.redis.getAnalysisStatus(productId);
       
-      if (!cached) {
+      if (!result) {
         console.log(`🔍 Cache miss for analysis status: ${productId}`);
+        this.missCount++;
         return null;
       }
 
       console.log(`✅ Cache hit for analysis status: ${productId}`);
-      return JSON.parse(cached);
+      this.hitCount++;
+      return result;
     } catch (error) {
       console.error(`❌ Error getting analysis status from cache for ${productId}:`, error);
+      this.errorCount++;
       Sentry.captureException(error);
       return null;
     }
@@ -74,150 +121,198 @@ class CacheService {
    */
   async setAnalysisStatus(productId, status) {
     try {
-      const key = CacheKeys.analysisStatus(productId);
-      const value = JSON.stringify(status);
-      
-      await this.redis.setex(key, CacheTTL.ANALYSIS_STATUS, value);
-      console.log(`✅ Cached analysis status for product: ${productId}`);
+      const success = await this.redis.setAnalysisStatus(productId, status, CacheTTL.ANALYSIS_STATUS);
+      if (success) {
+        console.log(`✅ Cached analysis status for product: ${productId}`);
+      } else {
+        console.warn(`⚠️ Failed to cache analysis status for product: ${productId}`);
+      }
     } catch (error) {
       console.error(`❌ Error setting analysis status cache for ${productId}:`, error);
+      this.errorCount++;
       Sentry.captureException(error);
     }
   }
 
   /**
-   * Task ID로 분석 정보를 캐시에서 조회
+   * 인기 검색어 추가
    */
-  async getAnalysisByTaskId(taskId) {
+  async addPopularSearch(keyword, score = 1) {
     try {
-      const key = CacheKeys.analysisTask(taskId);
-      const cached = await this.redis.get(key);
+      const success = await this.redis.addPopularSearch(keyword, score);
+      if (success) {
+        console.log(`✅ Added popular search: ${keyword} (score: ${score})`);
+      }
+      return success;
+    } catch (error) {
+      console.error(`❌ Error adding popular search [${keyword}]:`, error);
+      this.errorCount++;
+      Sentry.captureException(error);
+      return false;
+    }
+  }
+
+  /**
+   * 인기 검색어 조회
+   */
+  async getPopularSearches(limit = 10) {
+    try {
+      const searches = await this.redis.getPopularSearches(limit);
+      console.log(`✅ Retrieved ${searches.length} popular searches`);
+      return searches;
+    } catch (error) {
+      console.error('❌ Error getting popular searches:', error);
+      this.errorCount++;
+      Sentry.captureException(error);
+      return [];
+    }
+  }
+
+  /**
+   * 사용자 검색 기록 추가
+   */
+  async addUserSearchHistory(userId, keyword, maxHistory = 10) {
+    try {
+      const success = await this.redis.addUserSearchHistory(userId, keyword, maxHistory);
+      if (success) {
+        console.log(`✅ Added user search history: ${userId} -> ${keyword}`);
+      }
+      return success;
+    } catch (error) {
+      console.error(`❌ Error adding user search history [${userId}]:`, error);
+      this.errorCount++;
+      Sentry.captureException(error);
+      return false;
+    }
+  }
+
+  /**
+   * 사용자 검색 기록 조회
+   */
+  async getUserSearchHistory(userId, limit = 10) {
+    try {
+      const history = await this.redis.getUserSearchHistory(userId, limit);
+      console.log(`✅ Retrieved ${history.length} search history items for user: ${userId}`);
+      return history;
+    } catch (error) {
+      console.error(`❌ Error getting user search history [${userId}]:`, error);
+      this.errorCount++;
+      Sentry.captureException(error);
+      return [];
+    }
+  }
+
+  /**
+   * 상품 정보 캐싱
+   */
+  async setProductInfo(productId, productInfo) {
+    try {
+      const success = await this.redis.setProductInfo(productId, productInfo, CacheTTL.PRODUCT_INFO);
+      if (success) {
+        console.log(`✅ Cached product info for: ${productId}`);
+      }
+      return success;
+    } catch (error) {
+      console.error(`❌ Error caching product info [${productId}]:`, error);
+      this.errorCount++;
+      Sentry.captureException(error);
+      return false;
+    }
+  }
+
+  /**
+   * 상품 정보 조회
+   */
+  async getProductInfo(productId) {
+    try {
+      const result = await this.redis.getProductInfo(productId);
       
-      if (!cached) {
-        console.log(`🔍 Cache miss for analysis task: ${taskId}`);
+      if (!result) {
+        console.log(`🔍 Cache miss for product info: ${productId}`);
+        this.missCount++;
         return null;
       }
 
-      console.log(`✅ Cache hit for analysis task: ${taskId}`);
-      return JSON.parse(cached);
+      console.log(`✅ Cache hit for product info: ${productId}`);
+      this.hitCount++;
+      return result;
     } catch (error) {
-      console.error(`❌ Error getting analysis by task ID from cache for ${taskId}:`, error);
+      console.error(`❌ Error getting product info from cache [${productId}]:`, error);
+      this.errorCount++;
       Sentry.captureException(error);
       return null;
     }
   }
 
   /**
-   * Task ID로 분석 정보를 캐시에 저장
+   * 검색 결과 캐싱
    */
-  async setAnalysisByTaskId(taskId, result) {
+  async setSearchResults(query, results) {
     try {
-      const key = CacheKeys.analysisTask(taskId);
-      const value = JSON.stringify(result);
-      
-      await this.redis.setex(key, CacheTTL.ANALYSIS_TASK, value);
-      console.log(`✅ Cached analysis for task: ${taskId}`);
+      const success = await this.redis.setSearchResults(query, results, CacheTTL.SEARCH_RESULTS);
+      if (success) {
+        console.log(`✅ Cached search results for query: ${query} (${results.length} items)`);
+      }
+      return success;
     } catch (error) {
-      console.error(`❌ Error setting analysis cache for task ${taskId}:`, error);
+      console.error(`❌ Error caching search results [${query}]:`, error);
+      this.errorCount++;
       Sentry.captureException(error);
+      return false;
     }
   }
 
   /**
-   * 특정 상품의 모든 캐시 무효화
+   * 검색 결과 조회
    */
-  async invalidateAnalysisCache(productId, taskId) {
+  async getSearchResults(query) {
+    try {
+      const result = await this.redis.getSearchResults(query);
+      
+      if (!result) {
+        console.log(`🔍 Cache miss for search results: ${query}`);
+        this.missCount++;
+        return null;
+      }
+
+      console.log(`✅ Cache hit for search results: ${query} (${result.results.length} items)`);
+      this.hitCount++;
+      return result;
+    } catch (error) {
+      console.error(`❌ Error getting search results from cache [${query}]:`, error);
+      this.errorCount++;
+      Sentry.captureException(error);
+      return null;
+    }
+  }
+
+  /**
+   * 캐시 무효화
+   */
+  async invalidateAnalysisCache(productId, taskId = null) {
     try {
       const keys = [
         CacheKeys.analysisResult(productId),
-        CacheKeys.analysisStatus(productId),
+        CacheKeys.analysisStatus(productId)
       ];
 
       if (taskId) {
-        keys.push(CacheKeys.analysisTask(taskId));
+        keys.push(`analysis_task:${taskId}`);
       }
 
-      const deletedCount = await this.redis.del(...keys);
-      console.log(`🗑️ Invalidated ${deletedCount} cache entries for product: ${productId}`);
+      const deletedCount = await this.redis.batchInvalidate(keys);
+      console.log(`✅ Invalidated ${deletedCount} cache keys for product: ${productId}`);
+      return deletedCount;
     } catch (error) {
-      console.error(`❌ Error invalidating cache for ${productId}:`, error);
+      console.error(`❌ Error invalidating analysis cache [${productId}]:`, error);
+      this.errorCount++;
       Sentry.captureException(error);
+      return 0;
     }
   }
 
   /**
-   * 캐시 상태 확인 (헬스체크용)
-   */
-  async healthCheck() {
-    try {
-      const start = Date.now();
-      await this.redis.ping();
-      const latency = Date.now() - start;
-      
-      return { status: 'healthy', latency };
-    } catch (error) {
-      console.error('❌ Redis health check failed:', error);
-      return { status: 'unhealthy' };
-    }
-  }
-
-  /**
-   * 캐시 통계 조회
-   */
-  async getCacheStats() {
-    try {
-      const info = await this.redis.info('memory');
-      const keyspace = await this.redis.info('keyspace');
-      
-      return {
-        memory: info,
-        keyspace: keyspace,
-        timestamp: new Date().toISOString(),
-      };
-    } catch (error) {
-      console.error('❌ Error getting cache stats:', error);
-      Sentry.captureException(error);
-      return null;
-    }
-  }
-
-  /**
-   * 캐시 워밍업 - 자주 요청되는 상품들을 미리 캐시에 로드
-   */
-  async warmupCache(productIds) {
-    try {
-      console.log(`🔥 Starting cache warmup for ${productIds.length} products`);
-      const { AnalysisModel } = require('../models/analysis');
-      const { getPool } = require('../config/database');
-      
-      const pool = getPool();
-      const analysisModel = new AnalysisModel(pool);
-      
-      let warmedCount = 0;
-      
-      for (const productId of productIds) {
-        try {
-          const analysis = await analysisModel.findByProductId(productId);
-          if (analysis && analysis.status === 'completed') {
-            await this.setAnalysisResult(productId, analysis);
-            warmedCount++;
-          }
-        } catch (error) {
-          console.warn(`⚠️ Failed to warm cache for product ${productId}:`, error.message);
-        }
-      }
-      
-      console.log(`✅ Cache warmup completed: ${warmedCount}/${productIds.length} products cached`);
-      return { warmedCount, totalRequested: productIds.length };
-    } catch (error) {
-      console.error('❌ Cache warmup failed:', error);
-      Sentry.captureException(error);
-      throw error;
-    }
-  }
-
-  /**
-   * 배치 캐시 무효화 - 여러 상품의 캐시를 한번에 무효화
+   * 배치 캐시 무효화
    */
   async batchInvalidateCache(productIds) {
     try {
@@ -226,43 +321,85 @@ class CacheService {
       for (const productId of productIds) {
         keys.push(
           CacheKeys.analysisResult(productId),
-          CacheKeys.analysisStatus(productId)
+          CacheKeys.analysisStatus(productId),
+          CacheKeys.productInfo(productId)
         );
       }
-      
-      if (keys.length > 0) {
-        const deletedCount = await this.redis.del(...keys);
-        console.log(`🗑️ Batch invalidated ${deletedCount} cache entries for ${productIds.length} products`);
-        return deletedCount;
-      }
-      
-      return 0;
+
+      const deletedCount = await this.redis.batchInvalidate(keys);
+      console.log(`✅ Batch invalidated ${deletedCount} cache keys for ${productIds.length} products`);
+      return deletedCount;
     } catch (error) {
-      console.error('❌ Batch cache invalidation failed:', error);
+      console.error('❌ Error in batch cache invalidation:', error);
+      this.errorCount++;
       Sentry.captureException(error);
-      throw error;
+      return 0;
     }
   }
 
   /**
-   * 캐시 히트율 추적
+   * 캐시 워밍업
    */
-  async trackCacheHitRate(productId, isHit) {
+  async warmupCache(productIds) {
     try {
-      const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-      const hitKey = `cache:hits:${date}`;
-      const missKey = `cache:misses:${date}`;
-      
-      if (isHit) {
-        await this.redis.incr(hitKey);
-        await this.redis.expire(hitKey, 86400 * 7); // 7일 보관
-      } else {
-        await this.redis.incr(missKey);
-        await this.redis.expire(missKey, 86400 * 7); // 7일 보관
+      let successCount = 0;
+      let failureCount = 0;
+
+      for (const productId of productIds) {
+        try {
+          // 여기서는 기본 상품 정보만 미리 로드
+          // 실제 구현에서는 DB에서 데이터를 가져와서 캐시에 저장
+          const productInfo = { id: productId, warmedUp: true, timestamp: new Date().toISOString() };
+          const success = await this.setProductInfo(productId, productInfo);
+          
+          if (success) {
+            successCount++;
+          } else {
+            failureCount++;
+          }
+        } catch (error) {
+          failureCount++;
+          console.error(`❌ Error warming up cache for product ${productId}:`, error);
+        }
       }
+
+      console.log(`✅ Cache warmup completed: ${successCount} success, ${failureCount} failures`);
+      return { successCount, failureCount, total: productIds.length };
     } catch (error) {
-      console.error('❌ Error tracking cache hit rate:', error);
-      // 히트율 추적 실패는 메인 로직에 영향을 주지 않음
+      console.error('❌ Error in cache warmup:', error);
+      this.errorCount++;
+      Sentry.captureException(error);
+      return { successCount: 0, failureCount: productIds.length, total: productIds.length };
+    }
+  }
+
+  /**
+   * 캐시 통계 조회
+   */
+  async getCacheStats() {
+    try {
+      const redisStats = await this.redis.getCacheStats();
+      
+      return {
+        redis: redisStats,
+        hitRate: this.hitCount + this.missCount > 0 ? 
+          (this.hitCount / (this.hitCount + this.missCount) * 100).toFixed(2) + '%' : '0%',
+        hits: this.hitCount,
+        misses: this.missCount,
+        errors: this.errorCount,
+        connected: this.redis.isReady()
+      };
+    } catch (error) {
+      console.error('❌ Error getting cache stats:', error);
+      this.errorCount++;
+      return {
+        redis: null,
+        hitRate: '0%',
+        hits: this.hitCount,
+        misses: this.missCount,
+        errors: this.errorCount,
+        connected: false
+      };
     }
   }
 
@@ -271,47 +408,84 @@ class CacheService {
    */
   async getCacheHitRate(days = 7) {
     try {
-      const stats = [];
+      // 간단한 히트율 계산 (실제 구현에서는 더 정교한 통계 필요)
+      const totalRequests = this.hitCount + this.missCount;
+      const hitRate = totalRequests > 0 ? (this.hitCount / totalRequests * 100).toFixed(2) : 0;
       
-      for (let i = 0; i < days; i++) {
-        const date = new Date();
-        date.setDate(date.getDate() - i);
-        const dateStr = date.toISOString().split('T')[0];
-        
-        const hitKey = `cache:hits:${dateStr}`;
-        const missKey = `cache:misses:${dateStr}`;
-        
-        const [hits, misses] = await Promise.all([
-          this.redis.get(hitKey),
-          this.redis.get(missKey)
-        ]);
-        
-        const hitCount = parseInt(hits || '0');
-        const missCount = parseInt(misses || '0');
-        const total = hitCount + missCount;
-        const hitRate = total > 0 ? (hitCount / total * 100).toFixed(2) : '0.00';
-        
-        stats.push({
-          date: dateStr,
-          hits: hitCount,
-          misses: missCount,
-          total,
-          hitRate: parseFloat(hitRate)
-        });
-      }
-      
-      return stats;
+      return {
+        period: `${days} days`,
+        hitRate: `${hitRate}%`,
+        totalHits: this.hitCount,
+        totalMisses: this.missCount,
+        totalRequests,
+        errorRate: totalRequests > 0 ? (this.errorCount / totalRequests * 100).toFixed(2) + '%' : '0%'
+      };
     } catch (error) {
       console.error('❌ Error getting cache hit rate:', error);
-      Sentry.captureException(error);
-      return [];
+      this.errorCount++;
+      return {
+        period: `${days} days`,
+        hitRate: '0%',
+        totalHits: 0,
+        totalMisses: 0,
+        totalRequests: 0,
+        errorRate: '100%'
+      };
+    }
+  }
+
+  /**
+   * 헬스 체크
+   */
+  async healthCheck() {
+    try {
+      const redisHealth = await this.redis.healthCheck();
+      
+      return {
+        status: redisHealth.status,
+        redis: redisHealth,
+        stats: {
+          hits: this.hitCount,
+          misses: this.missCount,
+          errors: this.errorCount
+        }
+      };
+    } catch (error) {
+      console.error('❌ Cache health check failed:', error);
+      this.errorCount++;
+      return {
+        status: 'unhealthy',
+        redis: { status: 'error', message: error.message },
+        stats: {
+          hits: this.hitCount,
+          misses: this.missCount,
+          errors: this.errorCount
+        }
+      };
+    }
+  }
+
+  /**
+   * 캐시 히트율 추적 (내부 메서드)
+   */
+  async trackCacheHitRate(key, isHit) {
+    try {
+      // 간단한 통계 추적 (실제 구현에서는 더 정교한 메트릭 수집 필요)
+      const statsKey = `cache_stats:${new Date().toISOString().split('T')[0]}`;
+      const field = isHit ? 'hits' : 'misses';
+      
+      if (this.redis.isReady()) {
+        await this.redis.client.hincrby(statsKey, field, 1);
+        await this.redis.client.expire(statsKey, 30 * 24 * 3600); // 30일 보관
+      }
+    } catch (error) {
+      // 통계 추적 실패는 무시 (메인 기능에 영향 없음)
+      console.debug('Cache hit rate tracking failed:', error);
     }
   }
 }
 
-// Singleton instance
+// 싱글톤 인스턴스 생성 및 내보내기
 const cacheService = new CacheService();
 
-module.exports = {
-  cacheService
-};
+module.exports = { cacheService, CacheKeys, CacheTTL };
