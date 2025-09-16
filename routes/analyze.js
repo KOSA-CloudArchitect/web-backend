@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, param, validationResult } = require('express-validator');
 const httpClient = require('../services/httpClient');
+const analysisService = require('../services/analysisService');
 const { 
   asyncHandler, 
   AppError, 
@@ -14,6 +15,13 @@ const { AnalysisModel } = require('../models/analysis');
 const { cacheService } = require('../services/cacheService');
 
 const router = express.Router();
+
+/**
+ * @swagger
+ * tags:
+ *   name: Analysis
+ *   description: 리뷰 분석 관련 API
+ */
 
 // Validation middleware
 const validateAnalysisRequest = [
@@ -48,6 +56,55 @@ const checkValidation = (req) => {
   }
 };
 
+/**
+ * @swagger
+ * /api/analyze:
+ *   post:
+ *     summary: 리뷰 분석 요청
+ *     description: 특정 상품에 대한 리뷰 분석을 시작합니다.
+ *     tags: [Analysis]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/AnalysisRequest'
+ *     responses:
+ *       200:
+ *         description: 분석 요청 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: 분석이 시작되었습니다.
+ *                 taskId:
+ *                   type: string
+ *                   description: 분석 작업 ID
+ *                 estimatedTime:
+ *                   type: integer
+ *                   description: 예상 완료 시간 (초)
+ *                 fromCache:
+ *                   type: boolean
+ *                   description: 캐시된 결과인지 여부
+ *       400:
+ *         description: 잘못된 요청
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: 서버 오류
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 /**
  * POST /api/analyze
  * 분석 요청 시작
@@ -156,6 +213,55 @@ router.post('/', validateAnalysisRequest, asyncHandler(async (req, res) => {
   }
 }));
 
+/**
+ * @swagger
+ * /api/analyze/status/{productId}:
+ *   get:
+ *     summary: 분석 상태 확인
+ *     description: 특정 상품의 분석 진행 상태를 확인합니다.
+ *     tags: [Analysis]
+ *     parameters:
+ *       - in: path
+ *         name: productId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: 상품 ID
+ *     responses:
+ *       200:
+ *         description: 분석 상태 조회 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   enum: [pending, processing, completed, failed]
+ *                   description: 분석 상태
+ *                 progress:
+ *                   type: integer
+ *                   minimum: 0
+ *                   maximum: 100
+ *                   description: 진행률 (%)
+ *                 estimatedTime:
+ *                   type: integer
+ *                   description: 예상 완료 시간 (초)
+ *                 error:
+ *                   type: string
+ *                   description: 오류 메시지 (실패 시)
+ *                 fromCache:
+ *                   type: boolean
+ *                   description: 캐시된 결과인지 여부
+ *       404:
+ *         description: 분석 정보를 찾을 수 없음
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: 서버 오류
+ */
 /**
  * GET /api/analyze/status/:productId
  * 분석 상태 확인
@@ -344,6 +450,48 @@ router.post('/callback', asyncHandler(async (req, res) => {
   }
 }));
 
+/**
+ * @swagger
+ * /api/analyze/result/{productId}:
+ *   get:
+ *     summary: 분석 결과 조회
+ *     description: 완료된 분석의 결과를 조회합니다.
+ *     tags: [Analysis]
+ *     parameters:
+ *       - in: path
+ *         name: productId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: 상품 ID
+ *     responses:
+ *       200:
+ *         description: 분석 결과 조회 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 status:
+ *                   type: string
+ *                   example: completed
+ *                 result:
+ *                   $ref: '#/components/schemas/AnalysisResult'
+ *                 fromCache:
+ *                   type: boolean
+ *                   description: 캐시된 결과인지 여부
+ *       404:
+ *         description: 분석 정보를 찾을 수 없음
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: 서버 오류
+ */
 /**
  * GET /api/analyze/result/:productId
  * 분석 결과 조회
@@ -572,6 +720,486 @@ router.get('/cache/hitrate', asyncHandler(async (req, res) => {
     console.error('❌ Cache hit rate retrieval failed:', error);
     
     throw new AppError('캐시 히트율 조회 중 오류가 발생했습니다.', 500, 'CACHE_HITRATE_ERROR');
+  }
+}));
+
+// ===== Airflow 연동 엔드포인트 =====
+
+/**
+ * @swagger
+ * /api/analyze/airflow/single:
+ *   post:
+ *     summary: 단일 상품 분석 DAG 트리거
+ *     description: Airflow를 통해 단일 상품 리뷰 분석을 시작합니다.
+ *     tags: [Analysis]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - productId
+ *               - productUrl
+ *               - userId
+ *             properties:
+ *               productId:
+ *                 type: string
+ *                 description: 상품 ID
+ *               productUrl:
+ *                 type: string
+ *                 format: uri
+ *                 description: 상품 URL
+ *               userId:
+ *                 type: string
+ *                 description: 사용자 ID
+ *     responses:
+ *       200:
+ *         description: DAG 트리거 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: 단일 상품 분석이 시작되었습니다.
+ *                 dagRunId:
+ *                   type: string
+ *                   description: DAG Run ID
+ *                 dagId:
+ *                   type: string
+ *                   description: DAG ID
+ *                 status:
+ *                   type: string
+ *                   example: triggered
+ *       400:
+ *         description: 잘못된 요청
+ *       500:
+ *         description: 서버 오류
+ */
+router.post('/airflow/single', [
+  body('productId').notEmpty().withMessage('Product ID is required'),
+  body('productUrl').isURL().withMessage('Valid product URL is required'),
+  body('userId').notEmpty().withMessage('User ID is required'),
+], asyncHandler(async (req, res) => {
+  checkValidation(req);
+
+  const { productId, productUrl, userId } = req.body;
+
+  console.log(`🚀 Single product analysis request via Airflow:`, {
+    productId,
+    userId,
+  });
+
+  try {
+    const result = await analysisService.requestSingleProductAnalysis({
+      productId,
+      productUrl,
+      userId,
+    });
+
+    res.json({
+      success: true,
+      message: result.cached ? 
+        '이미 분석이 진행 중입니다.' : 
+        '단일 상품 분석이 시작되었습니다.',
+      ...result,
+    });
+
+  } catch (error) {
+    console.error('❌ Single product analysis request failed:', error);
+    
+    Sentry.withScope((scope) => {
+      scope.setTag('airflow_single_analysis_failed', true);
+      scope.setContext('analysis_request', { productId, userId });
+      Sentry.captureException(error);
+    });
+
+    throw new ExternalServiceError('단일 상품 분석 요청 중 오류가 발생했습니다.');
+  }
+}));
+
+/**
+ * @swagger
+ * /api/analyze/airflow/multi:
+ *   post:
+ *     summary: 다중 상품 분석 DAG 트리거
+ *     description: Airflow를 통해 검색어 기반 다중 상품 리뷰 분석을 시작합니다.
+ *     tags: [Analysis]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - searchQuery
+ *               - userId
+ *             properties:
+ *               searchQuery:
+ *                 type: string
+ *                 description: 검색어
+ *               userId:
+ *                 type: string
+ *                 description: 사용자 ID
+ *               maxProducts:
+ *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 50
+ *                 default: 10
+ *                 description: 최대 상품 수
+ *     responses:
+ *       200:
+ *         description: DAG 트리거 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: 다중 상품 분석이 시작되었습니다.
+ *                 dagRunId:
+ *                   type: string
+ *                   description: DAG Run ID
+ *                 dagId:
+ *                   type: string
+ *                   description: DAG ID
+ *                 status:
+ *                   type: string
+ *                   example: triggered
+ *       400:
+ *         description: 잘못된 요청
+ *       500:
+ *         description: 서버 오류
+ */
+router.post('/airflow/multi', [
+  body('searchQuery').notEmpty().withMessage('Search query is required'),
+  body('userId').notEmpty().withMessage('User ID is required'),
+  body('maxProducts').optional().isInt({ min: 1, max: 50 }).withMessage('Max products must be between 1 and 50'),
+], asyncHandler(async (req, res) => {
+  checkValidation(req);
+
+  const { searchQuery, userId, maxProducts = 10 } = req.body;
+
+  console.log(`🚀 Multi product analysis request via Airflow:`, {
+    searchQuery,
+    userId,
+    maxProducts,
+  });
+
+  try {
+    const result = await analysisService.requestMultiProductAnalysis({
+      searchQuery,
+      userId,
+      maxProducts,
+    });
+
+    res.json({
+      success: true,
+      message: result.cached ? 
+        '이미 분석이 진행 중입니다.' : 
+        '다중 상품 분석이 시작되었습니다.',
+      ...result,
+    });
+
+  } catch (error) {
+    console.error('❌ Multi product analysis request failed:', error);
+    
+    Sentry.withScope((scope) => {
+      scope.setTag('airflow_multi_analysis_failed', true);
+      scope.setContext('analysis_request', { searchQuery, userId, maxProducts });
+      Sentry.captureException(error);
+    });
+
+    throw new ExternalServiceError('다중 상품 분석 요청 중 오류가 발생했습니다.');
+  }
+}));
+
+/**
+ * @swagger
+ * /api/analyze/airflow/watchlist:
+ *   post:
+ *     summary: 관심 상품 배치 분석 DAG 트리거
+ *     description: Airflow를 통해 관심 상품 배치 분석을 시작합니다.
+ *     tags: [Analysis]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - userId
+ *               - productIds
+ *             properties:
+ *               userId:
+ *                 type: string
+ *                 description: 사용자 ID
+ *               productIds:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: 관심 상품 ID 목록
+ *                 minItems: 1
+ *                 maxItems: 100
+ *     responses:
+ *       200:
+ *         description: DAG 트리거 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: 관심 상품 배치 분석이 시작되었습니다.
+ *                 dagRunId:
+ *                   type: string
+ *                   description: DAG Run ID
+ *                 dagId:
+ *                   type: string
+ *                   description: DAG ID
+ *                 status:
+ *                   type: string
+ *                   example: triggered
+ *       400:
+ *         description: 잘못된 요청
+ *       500:
+ *         description: 서버 오류
+ */
+router.post('/airflow/watchlist', [
+  body('userId').notEmpty().withMessage('User ID is required'),
+  body('productIds').isArray({ min: 1, max: 100 }).withMessage('Product IDs must be an array with 1-100 items'),
+], asyncHandler(async (req, res) => {
+  checkValidation(req);
+
+  const { userId, productIds } = req.body;
+
+  console.log(`🚀 Watchlist analysis request via Airflow:`, {
+    userId,
+    productCount: productIds.length,
+  });
+
+  try {
+    const result = await analysisService.requestWatchlistAnalysis({
+      userId,
+      productIds,
+    });
+
+    res.json({
+      success: true,
+      message: result.cached ? 
+        '이미 관심 상품 분석이 진행 중입니다.' : 
+        '관심 상품 배치 분석이 시작되었습니다.',
+      ...result,
+    });
+
+  } catch (error) {
+    console.error('❌ Watchlist analysis request failed:', error);
+    
+    Sentry.withScope((scope) => {
+      scope.setTag('airflow_watchlist_analysis_failed', true);
+      scope.setContext('analysis_request', { userId, productCount: productIds.length });
+      Sentry.captureException(error);
+    });
+
+    throw new ExternalServiceError('관심 상품 분석 요청 중 오류가 발생했습니다.');
+  }
+}));
+
+/**
+ * @swagger
+ * /api/analyze/airflow/status/{dagId}/{dagRunId}:
+ *   get:
+ *     summary: Airflow DAG 실행 상태 조회
+ *     description: 특정 DAG Run의 실행 상태를 조회합니다.
+ *     tags: [Analysis]
+ *     parameters:
+ *       - in: path
+ *         name: dagId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: DAG ID
+ *       - in: path
+ *         name: dagRunId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: DAG Run ID
+ *     responses:
+ *       200:
+ *         description: DAG 상태 조회 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 dagId:
+ *                   type: string
+ *                   description: DAG ID
+ *                 dagRunId:
+ *                   type: string
+ *                   description: DAG Run ID
+ *                 state:
+ *                   type: string
+ *                   enum: [queued, running, success, failed]
+ *                   description: DAG 실행 상태
+ *                 progress:
+ *                   type: object
+ *                   properties:
+ *                     total:
+ *                       type: integer
+ *                     completed:
+ *                       type: integer
+ *                     failed:
+ *                       type: integer
+ *                     running:
+ *                       type: integer
+ *                     percentage:
+ *                       type: integer
+ *                 tasks:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       taskId:
+ *                         type: string
+ *                       state:
+ *                         type: string
+ *                       startDate:
+ *                         type: string
+ *                       endDate:
+ *                         type: string
+ *                       duration:
+ *                         type: number
+ *       404:
+ *         description: DAG Run을 찾을 수 없음
+ *       500:
+ *         description: 서버 오류
+ */
+router.get('/airflow/status/:dagId/:dagRunId', [
+  param('dagId').notEmpty().withMessage('DAG ID is required'),
+  param('dagRunId').notEmpty().withMessage('DAG Run ID is required'),
+], asyncHandler(async (req, res) => {
+  checkValidation(req);
+
+  const { dagId, dagRunId } = req.params;
+
+  console.log(`🔍 Airflow DAG status check:`, { dagId, dagRunId });
+
+  try {
+    const result = await analysisService.getAnalysisStatus(dagId, dagRunId);
+
+    res.json({
+      success: true,
+      ...result,
+    });
+
+  } catch (error) {
+    console.error('❌ Airflow DAG status check failed:', error);
+    
+    if (error.response?.status === 404) {
+      throw new AppError('DAG Run을 찾을 수 없습니다.', 404, 'DAG_RUN_NOT_FOUND');
+    }
+
+    Sentry.withScope((scope) => {
+      scope.setTag('airflow_status_check_failed', true);
+      scope.setContext('dag_status_check', { dagId, dagRunId });
+      Sentry.captureException(error);
+    });
+
+    throw new ExternalServiceError('DAG 상태 조회 중 오류가 발생했습니다.');
+  }
+}));
+
+/**
+ * @swagger
+ * /api/analyze/airflow/active/{userId}:
+ *   get:
+ *     summary: 사용자의 활성 분석 목록 조회
+ *     description: 특정 사용자의 진행 중인 분석 목록을 조회합니다.
+ *     tags: [Analysis]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: 사용자 ID
+ *     responses:
+ *       200:
+ *         description: 활성 분석 목록 조회 성공
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 analyses:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       dagId:
+ *                         type: string
+ *                       dagRunId:
+ *                         type: string
+ *                       type:
+ *                         type: string
+ *                         enum: [single, multi, watchlist]
+ *                       status:
+ *                         type: string
+ *                       createdAt:
+ *                         type: string
+ *                         format: date-time
+ *       500:
+ *         description: 서버 오류
+ */
+router.get('/airflow/active/:userId', [
+  param('userId').notEmpty().withMessage('User ID is required'),
+], asyncHandler(async (req, res) => {
+  checkValidation(req);
+
+  const { userId } = req.params;
+
+  console.log(`🔍 Active analyses check for user:`, { userId });
+
+  try {
+    const analyses = await analysisService.getActiveAnalyses(userId);
+
+    res.json({
+      success: true,
+      analyses,
+      count: analyses.length,
+    });
+
+  } catch (error) {
+    console.error('❌ Active analyses check failed:', error);
+    
+    Sentry.withScope((scope) => {
+      scope.setTag('active_analyses_check_failed', true);
+      scope.setContext('active_analyses_check', { userId });
+      Sentry.captureException(error);
+    });
+
+    throw new ExternalServiceError('활성 분석 목록 조회 중 오류가 발생했습니다.');
   }
 }));
 
