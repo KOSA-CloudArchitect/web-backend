@@ -1,5 +1,5 @@
 const axios = require('axios');
-const axiosRetry = require('axios-retry');
+const axiosRetry = require('axios-retry').default;
 const CircuitBreaker = require('opossum');
 const { Sentry } = require('../config/sentry');
 
