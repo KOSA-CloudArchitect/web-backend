@@ -63,7 +63,7 @@ pipeline {
                         sh 'npx prisma generate'
                         sh 'npm run build'
                     }
-                    
+
                     def ecrPassword = container('aws-cli') {
                         withCredentials([aws(credentialsId: 'aws-credentials-manual-test')]) {
                             return sh(script: "aws ecr get-login-password --region ${env.AWS_REGION}", returnStdout: true).trim()
@@ -87,19 +87,19 @@ pipeline {
                     sh '''
                         set -e
                         export GIT_SSH_COMMAND="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
-                        
+
                         git clone ${INFRA_REPO_URL} infra_repo
                         cd infra_repo
-                        
+
                         git config user.email "jenkins-ci@example.com"
                         git config user.name "Jenkins CI"
-                        
+
                         mkdir -p image
                         echo "${COMMIT_HASH}" > image/web-backend.txt
-                        
+
                         KUSTOMIZE_FILE="kubernetes/namespaces/web-tier,cache-tier/04-applications/kustomization.yaml"
                         sed -i "s/newTag: .*/newTag: ${COMMIT_HASH}/" ${KUSTOMIZE_FILE}
-                        
+
                         git add image/web-backend.txt ${KUSTOMIZE_FILE}
                         git commit -m "Update backend image tag to ${COMMIT_HASH}" || echo "No changes to commit"
                         git push origin main

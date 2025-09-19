@@ -26,3 +26,4 @@ spec:
     image: amazon/aws-cli:latest
     command: ["sleep"]
     args: ["infinity"]
+

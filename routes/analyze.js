@@ -1,5 +1,5 @@
 const express = require('express');
-const { body, param, query, validationResult } = require('express-validator');
+const { body, param, validationResult } = require('express-validator');
 const httpClient = require('../services/httpClient');
 const analysisService = require('../services/analysisService');
 const { 
@@ -13,7 +13,6 @@ const { Sentry } = require('../config/sentry');
 const { getPool } = require('../config/database');
 const { AnalysisModel } = require('../models/analysis');
 const { cacheService } = require('../services/cacheService');
-const websocketService = require('../services/websocketService');
 
 const router = express.Router();
 
@@ -408,14 +407,15 @@ router.post('/callback', asyncHandler(async (req, res) => {
     }
 
     // 5. WebSocket으로 상태 업데이트 알림
-    websocketService.sendAnalysisUpdate(taskId, {
-      status,
-      result,
-      error,
-      type: 'callback_received',
-      message: status === 'completed' ? '분석이 완료되었습니다.' : 
-               status === 'failed' ? '분석이 실패했습니다.' : '분석 상태가 업데이트되었습니다.'
-    });
+    const io = req.app.get('io');
+    if (io) {
+      io.emit(`analysis:${taskId}`, {
+        status,
+        result,
+        error,
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     // Sentry에 콜백 이벤트 기록
     Sentry.addBreadcrumb({
@@ -802,16 +802,11 @@ router.post('/airflow/single', [
       userId,
     });
 
-    let message = '단일 상품 분석이 시작되었습니다.';
-    if (result.status === 'queued') {
-      message = `분석 대기열에 추가되었습니다. (대기 순서: ${result.queuePosition}번째)`;
-    } else if (result.cached) {
-      message = '이미 분석이 진행 중입니다.';
-    }
-
     res.json({
       success: true,
-      message,
+      message: result.cached ? 
+        '이미 분석이 진행 중입니다.' : 
+        '단일 상품 분석이 시작되었습니다.',
       ...result,
     });
 
@@ -1205,420 +1200,6 @@ router.get('/airflow/active/:userId', [
     });
 
     throw new ExternalServiceError('활성 분석 목록 조회 중 오류가 발생했습니다.');
-  }
-}));
-
-/**
- * @swagger
- * /api/analyze/redis/status/{taskId}:
- *   get:
- *     summary: Redis 기반 분석 상태 조회
- *     description: Task ID를 이용하여 Redis에서 분석 상태를 조회합니다.
- *     tags: [Analysis]
- *     parameters:
- *       - in: path
- *         name: taskId
- *         required: true
- *         schema:
- *           type: string
- *         description: 작업 ID
- *     responses:
- *       200:
- *         description: 분석 상태 조회 성공
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 status:
- *                   type: string
- *                   enum: [pending, processing, completed, failed, queued]
- *                 progress:
- *                   type: integer
- *                   minimum: 0
- *                   maximum: 100
- *                 queueInfo:
- *                   type: object
- *                   properties:
- *                     position:
- *                       type: integer
- *                     totalUsers:
- *                       type: integer
- *                     estimatedCompletion:
- *                       type: string
- *                       format: date-time
- *       404:
- *         description: 분석 요청을 찾을 수 없음
- *       500:
- *         description: 서버 오류
- */
-router.get('/redis/status/:taskId', [
-  param('taskId').notEmpty().withMessage('Task ID is required'),
-], asyncHandler(async (req, res) => {
-  checkValidation(req);
-
-  const { taskId } = req.params;
-
-  console.log(`🔍 Redis analysis status check for task: ${taskId}`);
-
-  try {
-    const status = await analysisService.getAnalysisStatusByTaskId(taskId);
-
-    res.json({
-      success: true,
-      ...status,
-    });
-
-  } catch (error) {
-    console.error('❌ Redis analysis status check failed:', error);
-    
-    if (error.message === 'Analysis request not found') {
-      throw new AppError('분석 요청을 찾을 수 없습니다.', 404, 'ANALYSIS_NOT_FOUND');
-    }
-
-    Sentry.withScope((scope) => {
-      scope.setTag('redis_status_check_failed', true);
-      scope.setContext('redis_status_check', { taskId });
-      Sentry.captureException(error);
-    });
-
-    throw new ExternalServiceError('분석 상태 조회 중 오류가 발생했습니다.');
-  }
-}));
-
-/**
- * @swagger
- * /api/analyze/redis/product/{productId}/status:
- *   get:
- *     summary: 상품 기반 분석 상태 조회
- *     description: 상품 ID와 사용자 ID를 이용하여 분석 상태를 조회합니다.
- *     tags: [Analysis]
- *     parameters:
- *       - in: path
- *         name: productId
- *         required: true
- *         schema:
- *           type: string
- *         description: 상품 ID
- *       - in: query
- *         name: userId
- *         required: true
- *         schema:
- *           type: string
- *         description: 사용자 ID
- *     responses:
- *       200:
- *         description: 분석 상태 조회 성공
- *       404:
- *         description: 분석 요청을 찾을 수 없음
- *       500:
- *         description: 서버 오류
- */
-router.get('/redis/product/:productId/status', [
-  param('productId').notEmpty().withMessage('Product ID is required'),
-  query('userId').notEmpty().withMessage('User ID is required'),
-], asyncHandler(async (req, res) => {
-  checkValidation(req);
-
-  const { productId } = req.params;
-  const { userId } = req.query;
-
-  console.log(`🔍 Product analysis status check:`, { productId, userId });
-
-  try {
-    const status = await analysisService.getAnalysisStatusByProduct(productId, userId);
-
-    if (!status) {
-      return res.json({
-        success: true,
-        status: null,
-        message: '진행 중인 분석이 없습니다.',
-      });
-    }
-
-    res.json({
-      success: true,
-      ...status,
-    });
-
-  } catch (error) {
-    console.error('❌ Product analysis status check failed:', error);
-    
-    Sentry.withScope((scope) => {
-      scope.setTag('product_status_check_failed', true);
-      scope.setContext('product_status_check', { productId, userId });
-      Sentry.captureException(error);
-    });
-
-    throw new ExternalServiceError('상품 분석 상태 조회 중 오류가 발생했습니다.');
-  }
-}));
-
-/**
- * @swagger
- * /api/analyze/result/mongo/{productId}:
- *   get:
- *     summary: MongoDB에서 분석 결과 조회
- *     description: 상품 ID를 이용하여 MongoDB에서 최신 분석 결과를 조회합니다.
- *     tags: [Analysis]
- *     parameters:
- *       - in: path
- *         name: productId
- *         required: true
- *         schema:
- *           type: string
- *         description: 상품 ID
- *     responses:
- *       200:
- *         description: 분석 결과 조회 성공
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 result:
- *                   type: object
- *                   properties:
- *                     productId:
- *                       type: string
- *                     sentiment:
- *                       type: object
- *                       properties:
- *                         positive:
- *                           type: number
- *                         negative:
- *                           type: number
- *                         neutral:
- *                           type: number
- *                     summary:
- *                       type: string
- *                     keywords:
- *                       type: array
- *                       items:
- *                         type: string
- *                     totalReviews:
- *                       type: integer
- *                     averageRating:
- *                       type: number
- *       404:
- *         description: 분석 결과를 찾을 수 없음
- *       500:
- *         description: 서버 오류
- */
-router.get('/result/mongo/:productId', [
-  param('productId').notEmpty().withMessage('Product ID is required'),
-], asyncHandler(async (req, res) => {
-  checkValidation(req);
-
-  const { productId } = req.params;
-
-  console.log(`🔍 MongoDB analysis result request for product: ${productId}`);
-
-  try {
-    const result = await analysisService.getAnalysisResult(productId);
-
-    if (!result) {
-      return res.status(404).json({
-        success: false,
-        message: '해당 상품의 분석 결과를 찾을 수 없습니다.',
-      });
-    }
-
-    res.json({
-      success: true,
-      result,
-    });
-
-  } catch (error) {
-    console.error('❌ MongoDB analysis result retrieval failed:', error);
-    
-    Sentry.withScope((scope) => {
-      scope.setTag('mongodb_result_retrieval_failed', true);
-      scope.setContext('mongodb_result_retrieval', { productId });
-      Sentry.captureException(error);
-    });
-
-    throw new ExternalServiceError('분석 결과 조회 중 오류가 발생했습니다.');
-  }
-}));
-
-/**
- * @swagger
- * /api/analyze/results/user/{userId}:
- *   get:
- *     summary: 사용자의 분석 결과 목록 조회
- *     description: 특정 사용자의 분석 결과 목록을 페이징으로 조회합니다.
- *     tags: [Analysis]
- *     parameters:
- *       - in: path
- *         name: userId
- *         required: true
- *         schema:
- *           type: string
- *         description: 사용자 ID
- *       - in: query
- *         name: page
- *         schema:
- *           type: integer
- *           minimum: 1
- *           default: 1
- *         description: 페이지 번호
- *       - in: query
- *         name: limit
- *         schema:
- *           type: integer
- *           minimum: 1
- *           maximum: 50
- *           default: 10
- *         description: 페이지당 개수
- *     responses:
- *       200:
- *         description: 분석 결과 목록 조회 성공
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 results:
- *                   type: array
- *                   items:
- *                     type: object
- *                 pagination:
- *                   type: object
- *                   properties:
- *                     page:
- *                       type: integer
- *                     limit:
- *                       type: integer
- *                     total:
- *                       type: integer
- *                     pages:
- *                       type: integer
- *       500:
- *         description: 서버 오류
- */
-router.get('/results/user/:userId', [
-  param('userId').notEmpty().withMessage('User ID is required'),
-  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
-  query('limit').optional().isInt({ min: 1, max: 50 }).withMessage('Limit must be between 1 and 50'),
-], asyncHandler(async (req, res) => {
-  checkValidation(req);
-
-  const { userId } = req.params;
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 10;
-
-  console.log(`🔍 User analysis results request:`, { userId, page, limit });
-
-  try {
-    const results = await analysisService.getUserAnalysisResults(userId, page, limit);
-
-    res.json({
-      success: true,
-      ...results,
-    });
-
-  } catch (error) {
-    console.error('❌ User analysis results retrieval failed:', error);
-    
-    Sentry.withScope((scope) => {
-      scope.setTag('user_results_retrieval_failed', true);
-      scope.setContext('user_results_retrieval', { userId, page, limit });
-      Sentry.captureException(error);
-    });
-
-    throw new ExternalServiceError('사용자 분석 결과 조회 중 오류가 발생했습니다.');
-  }
-}));
-
-/**
- * @swagger
- * /api/analyze/result/process:
- *   post:
- *     summary: 분석 결과 처리 (Airflow 콜백용)
- *     description: Airflow에서 분석 완료 시 호출하는 콜백 엔드포인트입니다.
- *     tags: [Analysis]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - taskId
- *               - result
- *             properties:
- *               taskId:
- *                 type: string
- *                 description: 작업 ID
- *               result:
- *                 type: object
- *                 properties:
- *                   sentiment:
- *                     type: object
- *                     properties:
- *                       positive:
- *                         type: number
- *                       negative:
- *                         type: number
- *                       neutral:
- *                         type: number
- *                   summary:
- *                     type: string
- *                   totalReviews:
- *                     type: integer
- *                   averageRating:
- *                     type: number
- *                   keywords:
- *                     type: array
- *                     items:
- *                       type: string
- *     responses:
- *       200:
- *         description: 분석 결과 처리 성공
- *       400:
- *         description: 잘못된 요청
- *       500:
- *         description: 서버 오류
- */
-router.post('/result/process', [
-  body('taskId').notEmpty().withMessage('Task ID is required'),
-  body('result').isObject().withMessage('Result object is required'),
-], asyncHandler(async (req, res) => {
-  checkValidation(req);
-
-  const { taskId, result } = req.body;
-
-  console.log(`📊 Processing analysis result callback for task: ${taskId}`);
-
-  try {
-    const savedResult = await analysisService.processAnalysisResult(taskId, result);
-
-    res.json({
-      success: true,
-      message: '분석 결과가 성공적으로 처리되었습니다.',
-      mongoId: savedResult._id,
-    });
-
-  } catch (error) {
-    console.error('❌ Analysis result processing failed:', error);
-    
-    Sentry.withScope((scope) => {
-      scope.setTag('analysis_result_processing_failed', true);
-      scope.setContext('analysis_result_processing', { taskId });
-      Sentry.captureException(error);
-    });
-
-    throw new ExternalServiceError('분석 결과 처리 중 오류가 발생했습니다.');
   }
 }));
 
