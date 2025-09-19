@@ -44,21 +44,36 @@ const logger = winston.createLogger({
 
 // 파일 로깅 (프로덕션 환경에서만)
 if (process.env.NODE_ENV === 'production') {
+  const fs = require('fs');
   // 로그 디렉토리 생성
   const logDir = path.join(__dirname, '..', 'logs');
   
-  logger.add(new winston.transports.File({
-    filename: path.join(logDir, 'error.log'),
-    level: 'error',
-    maxsize: 5242880, // 5MB
-    maxFiles: 5
-  }));
+  // 로그 디렉토리가 없으면 생성
+  if (!fs.existsSync(logDir)) {
+    try {
+      fs.mkdirSync(logDir, { recursive: true });
+    } catch (error) {
+      console.warn('로그 디렉토리 생성 실패:', error.message);
+    }
+  }
+  
+  // 로그 디렉토리가 존재하는 경우에만 파일 로그 추가
+  if (fs.existsSync(logDir)) {
+    logger.add(new winston.transports.File({
+      filename: path.join(logDir, 'error.log'),
+      level: 'error',
+      maxsize: 5242880, // 5MB
+      maxFiles: 5
+    }));
 
-  logger.add(new winston.transports.File({
-    filename: path.join(logDir, 'combined.log'),
-    maxsize: 5242880, // 5MB
-    maxFiles: 5
-  }));
+    logger.add(new winston.transports.File({
+      filename: path.join(logDir, 'combined.log'),
+      maxsize: 5242880, // 5MB
+      maxFiles: 5
+    }));
+  } else {
+    console.warn('로그 디렉토리를 생성할 수 없어 파일 로깅이 비활성화됩니다.');
+  }
 }
 
 // 개발 환경에서는 더 자세한 로그 출력
