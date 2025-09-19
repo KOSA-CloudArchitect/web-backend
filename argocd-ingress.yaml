@@ -1,0 +1,39 @@
+# argocd-ingress.yaml
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server-ingress
+  namespace: argocd
+  annotations:
+    # Ingress 클래스를 ALB로 지정
+    kubernetes.io/ingress.class: alb
+    # ALB를 인터넷에 노출 (외부 접속용)
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    # Pod의 IP 주소로 직접 트래픽을 라우팅하여 성능 향상
+    alb.ingress.kubernetes.io/target-type: ip
+    # Argo CD 서버는 HTTPS로 통신하므로 백엔드 프로토콜을 HTTPS로 설정
+    alb.ingress.kubernetes.io/backend-protocol: HTTPS
+    # ALB가 80(HTTP), 443(HTTPS) 포트를 리스닝하도록 설정
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    # HTTP(80)로 들어온 모든 요청을 HTTPS(443)로 자동 리디렉션
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    # (선택 사항) AWS Certificate Manager(ACM)에서 발급받은 SSL 인증서 ARN을 입력하면
+    # 브라우저에서 '안전하지 않음' 경고 없이 접속할 수 있습니다.
+    # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:ACCOUNT_ID:certificate/CERTIFICATE_ID
+
+spec:
+  rules:
+    # 이곳에 설정한 도메인으로 접속 시 아래 규칙이 적용됩니다.
+    - host: your-argo-cd.your-domain.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                # Argo CD API 서버 서비스의 이름
+                name: argocd-server
+                # Argo CD API 서버 서비스의 HTTPS 포트
+                port:
+                  number: 443
