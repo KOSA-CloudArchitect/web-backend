@@ -1,4 +1,4 @@
-// Jenkinsfile for web-backend CI/CD with branch-specific logic and Discord notifications
+// Jenkinsfile (Final Version for Backend Multibranch Pipeline)
 
 pipeline {
     agent {
@@ -9,48 +9,64 @@ pipeline {
     }
 
     environment {
-        AWS_REGION = 'ap-northeast-2'
-        ECR_REGISTRY = '150297826798.dkr.ecr.ap-northeast-2.amazonaws.com'
-        ECR_REPOSITORY = 'web-server-backend'
-        INFRA_REPO_URL = 'git@github.com:KOSA-CloudArchitect/infra.git'
-        GITHUB_REPO = 'https://github.com/KOSA-CloudArchitect/web-backend'
+        AWS_ACCOUNT_ID    = '914215749228' // 👈 새로운 AWS 계정 ID 적용
+        AWS_REGION        = 'ap-northeast-2'
+        ECR_REGISTRY      = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        ECR_REPOSITORY    = 'web-server-backend' // 👈 ECR 리포지토리 이름 확인
+        INFRA_REPO_URL    = 'git@github.com:KOSA-CloudArchitect/infra.git'
+        GITHUB_REPO       = 'https://github.com/KOSA-CloudArchitect/web-backend'
     }
 
     stages {
-        stage('Checkout') {
+        // Stage 1: 모든 브랜치에서 공통으로 변수 초기화
+        stage('⚙️ Initialize') {
             steps {
-                checkout scm
-            }
-        }
-
-        stage('Build & Test') {
-            // This stage runs for all branches
-            steps {
-                container('node') {
-                    sh 'npm install'
-                    sh 'npx prisma generate'
-                    sh 'npm run build'
+                script {
+                    env.COMMIT_HASH        = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    env.GITHUB_COMMIT_URL  = "${env.GITHUB_REPO}/commit/${env.COMMIT_HASH}"
                 }
             }
         }
 
-        stage('Build & Push Image') {
-            // This stage runs ONLY for the 'main' branch
+        // Stage 2: develop 브랜치 및 PR에서 코드 및 빌드 검증
+        stage('✅ Verification & Build Check') {
             when {
-                branch 'main'
+                anyOf {
+                    branch 'develop'
+                    changeRequest()
+                }
             }
             steps {
-                script {
-                    env.COMMIT_HASH = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    env.GITHUB_COMMIT_URL = "${env.GITHUB_REPO}/commit/${env.COMMIT_HASH}"
-                    env.FULL_IMAGE_NAME = "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}:${env.COMMIT_HASH}"
+                container('node') {
+                    echo "Running clean install, prisma generate, and build..."
+                    sh 'npm ci' // 👈 npm install 대신 npm ci 사용
+                    sh 'npx prisma generate'
+                    sh 'npm run build'
+                }
+                container('podman') {
+                    echo "Verifying Docker build..."
+                    sh "podman build -t backend-build-test ."
+                    echo "Docker build check completed successfully."
+                }
+            }
+        }
 
+        // Stage 3 & 4: main 브랜치에서만 실제 빌드, 푸시, 배포
+        stage('🚀 Build & Push to ECR') {
+            when { branch 'main' }
+            steps {
+                script {
+                    env.FULL_IMAGE_NAME    = "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}:${env.COMMIT_HASH}"
+
+                    container('node') {
+                        sh 'npm ci' // 👈 npm install 대신 npm ci 사용
+                        sh 'npx prisma generate'
+                        sh 'npm run build'
+                    }
+                    
                     def ecrPassword = container('aws-cli') {
                         withCredentials([aws(credentialsId: 'aws-credentials-manual-test')]) {
-                            return sh(
-                                script: "aws ecr get-login-password --region ${env.AWS_REGION}",
-                                returnStdout: true
-                            ).trim()
+                            return sh(script: "aws ecr get-login-password --region ${env.AWS_REGION}", returnStdout: true).trim()
                         }
                     }
 
@@ -59,49 +75,33 @@ pipeline {
                         sh "podman build -t ${env.FULL_IMAGE_NAME} ."
                         sh "podman push ${env.FULL_IMAGE_NAME}"
                     }
-
                     echo "Successfully pushed image: ${env.FULL_IMAGE_NAME}"
                 }
             }
         }
 
-        stage('Update Infra Repository') {
-            // This stage runs ONLY for the 'main' branch
-            when {
-                branch 'main'
-            }
+        stage('🌐 Update Infra Repository') {
+            when { branch 'main' }
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'github-ssh-key', keyFileVariable: 'SSH_KEY')]) {
-                    // This script is the final, compatible version
                     sh '''
-                        # Configure Git to use the provided SSH key without host key checking
-                        export GIT_SSH_COMMAND="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+                        set -e
+                        export GIT_SSH_COMMAND="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
                         
-                        # Clone the infra repository into a separate directory
-                        git clone ${env.INFRA_REPO_URL} infra_repo
+                        git clone ${INFRA_REPO_URL} infra_repo
                         cd infra_repo
-
-                        # Configure Git user for the commit
+                        
                         git config user.email "jenkins-ci@example.com"
                         git config user.name "Jenkins CI"
-
-                        # 1. Write the new image tag to a text file for record-keeping
+                        
                         mkdir -p image
-                        echo "${env.COMMIT_HASH}" > image/web-backend.txt
+                        echo "${COMMIT_HASH}" > image/web-backend.txt
                         
-                        # 2. Define the path to the kustomization file
                         KUSTOMIZE_FILE="kubernetes/namespaces/web-tier,cache-tier/04-applications/kustomization.yaml"
+                        sed -i "s/newTag: .*/newTag: ${COMMIT_HASH}/" ${KUSTOMIZE_FILE}
                         
-                        # 3. Use the fully compatible sed command to update the newTag value
-                        sed -i 's/newTag: .*/newTag: "${env.COMMIT_HASH}"/' ${KUSTOMIZE_FILE}
-                        
-                        echo "kustomization.yaml newTag updated to ${env.COMMIT_HASH}"
-
-                        # 4. Add both the text file and kustomization.yaml to the commit
                         git add image/web-backend.txt ${KUSTOMIZE_FILE}
-                        
-                        # 5. Commit the changes with a descriptive message
-                        git commit -m "Update backend image tag to ${env.COMMIT_HASH}"
+                        git commit -m "Update backend image tag to ${COMMIT_HASH}" || echo "No changes to commit"
                         git push origin main
                     '''
                 }
@@ -109,25 +109,42 @@ pipeline {
         }
     }
 
+    // 빌드 후 작업: 최종 Discord 알림 로직
     post {
+        always {
+            cleanWs()
+        }
         success {
-            discordSend(
-                description: "✅ Backend CI/CD Pipeline Succeeded! [Branch: ${env.BRANCH_NAME}]",
-                footer: "Build Number: ${env.BUILD_NUMBER} | Image: ${env.FULL_IMAGE_NAME}",
-                link: env.BUILD_URL,
-                result: currentBuild.currentResult,
-                title: "Backend Jenkins Job",
-                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa" // 실제 Webhook URL로 변경하세요
-            )
+            script {
+                if (env.BRANCH_NAME == 'main') {
+                    discordSend(
+                        description: "✅ main 브랜치에서 빌드 푸시가 성공했습니다.\n\n📌 이미지: `${env.FULL_IMAGE_NAME}`\n🔗 GitHub Commit: [${env.COMMIT_HASH}](${env.GITHUB_COMMIT_URL})",
+                        footer: "빌드 번호: ${env.BUILD_NUMBER}",
+                        link: env.BUILD_URL,
+                        result: currentBuild.currentResult,
+                        title: "백엔드 Jenkins Job [MAIN]",
+                        webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa"
+                    )
+                } else if (env.BRANCH_NAME == 'develop') {
+                    discordSend(
+                        description: "✅ develop 브랜치에서 빌드가 성공했습니다.",
+                        footer: "빌드 번호: ${env.BUILD_NUMBER}",
+                        link: env.BUILD_URL,
+                        result: currentBuild.currentResult,
+                        title: "백엔드 Jenkins Job [DEVELOP]",
+                        webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa"
+                    )
+                }
+            }
         }
         failure {
             discordSend(
-                description: "❌ Backend CI/CD Pipeline Failed! [Branch: ${env.BRANCH_NAME}]",
-                footer: "Build Number: ${env.BUILD_NUMBER}",
+                description: "❌ 백엔드 CI/CD 파이프라인 실패\n\n- 브랜치: `${env.BRANCH_NAME}`\n🔗 GitHub Commit: [${env.COMMIT_HASH}](${env.GITHUB_COMMIT_URL})",
+                footer: "빌드 번호: ${env.BUILD_NUMBER}",
                 link: env.BUILD_URL,
                 result: currentBuild.currentResult,
-                title: "Backend Jenkins Job",
-                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa" // 실제 Webhook URL로 변경하세요
+                title: "백엔드 Jenkins Job",
+                webhookURL: "https://discord.com/api/webhooks/1415897323028086804/4FgLSXOR5RU25KqJdK8MSgoAjxAabGzluiNpP44pBGWAWXcVBOfMjxyu0pmPpmqEO5sa"
             )
         }
     }
