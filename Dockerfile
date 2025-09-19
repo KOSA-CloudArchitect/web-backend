@@ -16,6 +16,9 @@ COPY . .
 # Generate Prisma client
 RUN npx prisma generate
 
+# Create logs directory
+RUN mkdir -p /usr/src/app/logs && chmod 755 /usr/src/app/logs
+
 # Create a non-root user
 
 # Expose the port the app runs on
