@@ -156,10 +156,6 @@ class MongoChangeStreamService {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
 
-      // 진행률 계산 (리뷰 수에 기반)
-      const progress = this.calculateProgressFromReviewCount(aggregateData.review_cnt);
-      await websocketService.sendRealtimeProgress(productId, progress);
-
       // 일정 리뷰 수에 도달하면 최종 결과로 처리
       if (aggregateData.review_cnt >= 100) { // 100개 이상일 때 완료로 간주
         const finalSummary = this.createFinalSummaryFromAggregate(aggregateData);
@@ -363,9 +359,6 @@ class MongoChangeStreamService {
       };
 
       await websocketService.sendRealtimeFinalSummary(analysisResult.productId, finalSummary);
-      
-      // 진행률을 100%로 업데이트
-      await websocketService.sendRealtimeProgress(analysisResult.productId, 100);
 
     } catch (error) {
       logger.error('❌ Failed to handle analysis result change:', error);

@@ -5,14 +5,13 @@ const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const http = require('http');
-const socketIo = require('socket.io');
 const db = require('./db');
 const { initSentry, setupSentryErrorHandler } = require('./config/sentry');
 const { getPool, closePool } = require('./config/database');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const logger = require('./config/logger');
-const kafkaService = require('./services/kafkaService');
-const kafkaConsumer = require('./services/kafkaConsumer');
+// const kafkaService = require('./services/kafkaService');
+// const kafkaConsumer = require('./services/kafkaConsumer');
 const websocketService = require('./services/websocketService');
 const { serve, setup } = require('./config/swagger');
 const redisService = require('./services/redisService');
@@ -22,11 +21,16 @@ const productRouter = require('./routes/product');
 const categoryRouter = require('./routes/category');
 const analyzeRouter = require('./routes/analyze');
 const authRouter = require('./routes/auth');
-const kafkaRouter = require('./routes/kafka');
+// const kafkaRouter = require('./routes/kafka');
 const websocketRouter = require('./routes/websocket');
-const realtimeAnalysisRouter = require('./routes/realtimeAnalysis');
 const apiInfoRouter = require('./routes/api-info');
 const cacheRouter = require('./routes/cache');
+const interestsRouter = require('./routes/interests');
+const analysisStatusRouter = require('./routes/analysisStatus');
+const notificationsRouter = require('./routes/notifications');
+const trendingRouter = require('./routes/trending');
+const imageProxyRouter = require('./routes/image-proxy');
+// const interestUpdateConsumer = require('./services/interestUpdateConsumer');
 
 // Kafka 서비스는 별도 모듈로 분리됨
 
@@ -58,11 +62,24 @@ app.set('websocketService', websocketService);
 app.use(express.json());
 app.use(cookieParser());
 
+// 모든 HTTP 요청 로깅 미들웨어
+app.use((req, res, next) => {
+  console.log(`📡 ${req.method} ${req.path} - Query: ${JSON.stringify(req.query)} - Body: ${JSON.stringify(req.body)}`);
+  next();
+});
+
 // 세션 미들웨어 설정
 app.use(createSessionMiddleware());
 
+// Prometheus 메트릭 미들웨어
+const { httpMetricsMiddleware, metricsHandler, checkServiceHealth } = require('./middleware/metrics');
+app.use(httpMetricsMiddleware);
+
 // Swagger API 문서
 app.use('/api-docs', serve, setup);
+
+// Prometheus 메트릭 엔드포인트
+app.get('/metrics', metricsHandler);
 
 // 헬스 체크 엔드포인트
 /**
@@ -90,25 +107,39 @@ app.use('/api-docs', serve, setup);
  *                   type: string
  *                   example: KOSA Backend is running
  */
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'OK',
-    timestamp: new Date().toISOString(),
-    message: 'KOSA Backend is running'
-  });
+app.get('/health', async (req, res) => {
+  try {
+    const services = await checkServiceHealth();
+    const allHealthy = Object.values(services).every(status => status);
+    
+    res.status(allHealthy ? 200 : 503).json({
+      status: allHealthy ? 'OK' : 'DEGRADED',
+      timestamp: new Date().toISOString(),
+      message: 'KOSA Backend is running',
+      services: services
+    });
+  } catch (error) {
+    logger.error('Health check failed:', error);
+    res.status(500).json({
+      status: 'ERROR',
+      timestamp: new Date().toISOString(),
+      message: 'Health check failed',
+      error: error.message
+    });
+  }
 });
 
 // Redis 초기화
 async function initRedis() {
   try {
     logger.info('🔄 Redis 서비스 초기화 중...');
-    
+
     // Redis 서비스 초기화
     await redisService.initialize();
-    
+
     // 캐시 서비스 초기화
     await cacheService.initialize();
-    
+
     logger.info('✅ Redis 서비스 초기화 완료');
   } catch (error) {
     logger.error('❌ Redis 초기화 실패:', error);
@@ -116,32 +147,36 @@ async function initRedis() {
   }
 }
 
-// Kafka 초기화
-async function initKafka() {
-  try {
-    logger.info('🔄 Kafka 서비스 초기화 중...');
-    
-    // Kafka 서비스 초기화
-    await kafkaService.initialize();
-    
-    // Producer 연결
-    await kafkaService.connectProducer();
-    
-    // Consumer 초기화
-    await kafkaConsumer.initialize();
-    
-    logger.info('✅ Kafka 서비스 초기화 완료');
-  } catch (error) {
-    logger.error('❌ Kafka 초기화 실패:', error);
-    // Kafka 연결 실패해도 서버는 계속 실행
-  }
-}
+// Kafka 초기화 (현재 사용하지 않음)
+// async function initKafka() {
+//   try {
+//     logger.info('🔄 Kafka 서비스 초기화 중...');
+
+//     // Kafka 서비스 초기화
+//     await kafkaService.initialize();
+
+//     // Producer 연결
+//     await kafkaService.connectProducer();
+
+//     // Consumer 초기화
+//     await kafkaConsumer.initialize();
+
+//     // Interest Update Consumer 시작
+//     await interestUpdateConsumer.start();
+
+//     logger.info('✅ Kafka 서비스 초기화 완료');
+//   } catch (error) {
+//     logger.error('❌ Kafka 초기화 실패:', error);
+//     // Kafka 연결 실패해도 서버는 계속 실행
+//   }
+// }
 
 // WebSocket 연결 처리는 websocketService에서 자동으로 처리됨
 
-// 분석 상태 업데이트를 위한 함수
+// 분석 상태 업데이트를 위한 함수 (WebSocket 서비스를 통해)
 const updateAnalysisStatus = (productId, status, data = {}) => {
-  io.emit(`analysis:${productId}`, {
+  websocketService.emitToRoom(`product:${productId}`, 'analysis-update', {
+    productId,
     status,
     ...data
   });
@@ -149,11 +184,14 @@ const updateAnalysisStatus = (productId, status, data = {}) => {
 
 // 분석 상태 변경 시 WebSocket으로 알림
 const notifyAnalysisStatus = (productId, status) => {
-  io.emit('analysis_status', { productId, status });
+  websocketService.emitToRoom(`product:${productId}`, 'analysis_status', { 
+    productId, 
+    status 
+  });
 };
 
-// analyzeRoutes에서 사용할 수 있도록 io 객체와 notifyAnalysisStatus 함수 전달
-app.set('io', io);
+// analyzeRoutes에서 사용할 수 있도록 WebSocket 서비스와 notifyAnalysisStatus 함수 전달
+app.set('websocketService', websocketService);
 app.set('notifyAnalysisStatus', notifyAnalysisStatus);
 
 // 정적 파일 서빙
@@ -179,16 +217,12 @@ try {
   logger.info('✅ /api/analyze 라우트 등록 성공');
 
   logger.info('🛣️ /api/kafka 라우트 등록 시도 중...');
-  app.use('/api/kafka', kafkaRouter);
+  // app.use('/api/kafka', kafkaRouter);
   logger.info('✅ /api/kafka 라우트 등록 성공');
 
   logger.info('🛣️ /api/websocket 라우트 등록 시도 중...');
   app.use('/api/websocket', websocketRouter);
   logger.info('✅ /api/websocket 라우트 등록 성공');
-
-  logger.info('🛣️ /api/realtime 라우트 등록 시도 중...');
-  app.use('/api/realtime', realtimeAnalysisRouter);
-  logger.info('✅ /api/realtime 라우트 등록 성공');
 
   logger.info('🛣️ /api/info 라우트 등록 시도 중...');
   app.use('/api/info', apiInfoRouter);
@@ -197,6 +231,31 @@ try {
   logger.info('🛣️ /api/cache 라우트 등록 시도 중...');
   app.use('/api/cache', cacheRouter);
   logger.info('✅ /api/cache 라우트 등록 성공');
+
+  logger.info('🛣️ /api/interests 라우트 등록 시도 중...');
+  app.use('/api/interests', interestsRouter);
+  logger.info('✅ /api/interests 라우트 등록 성공');
+
+  logger.info('🛣️ /api/analysis-status 라우트 등록 시도 중...');
+  app.use('/api/analysis-status', analysisStatusRouter);
+  logger.info('✅ /api/analysis-status 라우트 등록 성공');
+
+  logger.info('🛣️ /api/notifications 라우트 등록 시도 중...');
+  app.use('/api/notifications', notificationsRouter);
+  logger.info('✅ /api/notifications 라우트 등록 성공');
+
+  logger.info('🛣️ /api/trending 라우트 등록 시도 중...');
+  app.use('/api/trending', trendingRouter);
+  logger.info('✅ /api/trending 라우트 등록 성공');
+
+  logger.info('🛣️ /api/image 라우트 등록 시도 중...');
+  app.use('/api/image', imageProxyRouter);
+  logger.info('✅ /api/image 라우트 등록 성공');
+
+  logger.info('🛣️ /api/alerts 라우트 등록 시도 중...');
+  const alertsRouter = require('./routes/alerts');
+  app.use('/api/alerts', alertsRouter);
+  logger.info('✅ /api/alerts 라우트 등록 성공');
 } catch (error) {
   logger.error('❌ 라우터 등록 중 오류 발생:', error);
   throw error;
@@ -243,8 +302,11 @@ async function startServer() {
     // Redis 초기화
     await initRedis();
 
-    // Kafka 초기화
-    await initKafka();
+    // Kafka 초기화 (현재 사용하지 않음)
+    // await initKafka();
+
+    // WebSocket 서비스는 이미 위에서 초기화됨 (line 54)
+    logger.info('✅ WebSocket 서비스 초기화 완료 (기존 인스턴스 사용)');
 
     // 에러 핸들러 설정
     setupSentryErrorHandler(app);
@@ -273,18 +335,22 @@ const gracefulShutdown = async (signal) => {
     // Close database connections
     await closePool();
     logger.info('✅ Database connections closed');
-    
+
     // Close Redis connections
     await redisService.disconnect();
     logger.info('✅ Redis connections closed');
-    
-    // Close Kafka connections
-    await kafkaService.disconnect();
-    logger.info('✅ Kafka connections closed');
-    
+
+    // Close Kafka connections (현재 사용하지 않음)
+    // await kafkaService.disconnect();
+
+    // Stop Interest Update Consumer (현재 사용하지 않음)
+    // await interestUpdateConsumer.stop();
+
+    // logger.info('✅ Kafka connections closed');
+
     // Close WebSocket server
     websocketService.close();
-    
+
     server.close(() => {
       logger.info('✅ HTTP server closed');
       process.exit(0);
