@@ -1,4 +1,4 @@
-// Jenkinsfile 
+// Jenkinsfile (Final Version for Backend Multibranch Pipeline)
 
 pipeline {
     agent {
@@ -9,10 +9,10 @@ pipeline {
     }
 
     environment {
-        AWS_ACCOUNT_ID    = '914215749228' // 👈 새로운 AWS 계정 ID 반영
+        AWS_ACCOUNT_ID    = '914215749228' // 👈 새로운 AWS 계정 ID 적용
         AWS_REGION        = 'ap-northeast-2'
         ECR_REGISTRY      = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-        ECR_REPOSITORY    = 'web-server-backend'
+        ECR_REPOSITORY    = 'web-server-backend' // 👈 ECR 리포지토리 이름 확인
         INFRA_REPO_URL    = 'git@github.com:KOSA-CloudArchitect/infra.git'
         GITHUB_REPO       = 'https://github.com/KOSA-CloudArchitect/web-backend'
     }
@@ -38,14 +38,13 @@ pipeline {
             }
             steps {
                 container('node') {
-                    echo "Running npm install, prisma generate, and build..."
-                    sh 'npm install'
+                    echo "Running clean install, prisma generate, and build..."
+                    sh 'npm ci' // 👈 npm install 대신 npm ci 사용
                     sh 'npx prisma generate'
                     sh 'npm run build'
                 }
                 container('podman') {
                     echo "Verifying Docker build..."
-                    // 이미지가 정상적으로 빌드되는지만 확인 (푸시 X)
                     sh "podman build -t backend-build-test ."
                     echo "Docker build check completed successfully."
                 }
@@ -59,13 +58,12 @@ pipeline {
                 script {
                     env.FULL_IMAGE_NAME    = "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}:${env.COMMIT_HASH}"
 
-                    // Node.js 빌드는 main 브랜치에서도 필요
                     container('node') {
-                        sh 'npm install'
+                        sh 'npm ci' // 👈 npm install 대신 npm ci 사용
                         sh 'npx prisma generate'
                         sh 'npm run build'
                     }
-                    
+
                     def ecrPassword = container('aws-cli') {
                         withCredentials([aws(credentialsId: 'aws-credentials-manual-test')]) {
                             return sh(script: "aws ecr get-login-password --region ${env.AWS_REGION}", returnStdout: true).trim()
@@ -89,21 +87,21 @@ pipeline {
                     sh '''
                         set -e
                         export GIT_SSH_COMMAND="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
-                        
-                        git clone $INFRA_REPO_URL infra_repo
+
+                        git clone ${INFRA_REPO_URL} infra_repo
                         cd infra_repo
-                        
+
                         git config user.email "jenkins-ci@example.com"
                         git config user.name "Jenkins CI"
-                        
+
                         mkdir -p image
-                        echo "$COMMIT_HASH" > image/web-backend.txt
-                        
+                        echo "${COMMIT_HASH}" > image/web-backend.txt
+
                         KUSTOMIZE_FILE="kubernetes/namespaces/web-tier,cache-tier/04-applications/kustomization.yaml"
-                        sed -i "s/newTag: .*/newTag: $COMMIT_HASH/" $KUSTOMIZE_FILE
-                        
-                        git add image/web-backend.txt $KUSTOMIZE_FILE
-                        git commit -m "Update backend image tag to $COMMIT_HASH" || echo "No changes to commit"
+                        sed -i "s/newTag: .*/newTag: ${COMMIT_HASH}/" ${KUSTOMIZE_FILE}
+
+                        git add image/web-backend.txt ${KUSTOMIZE_FILE}
+                        git commit -m "Update backend image tag to ${COMMIT_HASH}" || echo "No changes to commit"
                         git push origin main
                     '''
                 }
@@ -111,7 +109,7 @@ pipeline {
         }
     }
 
-    // 빌드 후 작업: 수정된 Discord 알림 로직 적용
+    // 빌드 후 작업: 최종 Discord 알림 로직
     post {
         always {
             cleanWs()
