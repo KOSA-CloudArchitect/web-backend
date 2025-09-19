@@ -8,8 +8,8 @@
 
 - Node.js 16 이상
 - PostgreSQL 12 이상
-- Redis 6 이상 (캐싱용)
-- npm 또는 yarn
+
+
 
 ### 환경 설정
 
@@ -1160,4 +1160,4 @@ curl http://localhost:3001/api/analyze/cache/stats
 
 # 특정 상품 캐시 무효화
 curl -X DELETE http://localhost:3001/api/analyze/cache/product-123
-```
+```# Test for Jenkins reactivation

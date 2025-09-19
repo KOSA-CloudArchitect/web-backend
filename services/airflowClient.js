@@ -2,7 +2,6 @@ const axios = require('axios');
 const axiosRetry = require('axios-retry').default;
 const CircuitBreaker = require('opossum');
 const { Sentry } = require('../config/sentry');
-const airflowTokenManager = require('./airflowTokenManager');
 
 /**
  * Airflow API 클라이언트
@@ -17,31 +16,28 @@ class AirflowClient {
 
   createAxiosInstance() {
     const client = axios.create({
-      baseURL: (process.env.AIRFLOW_API_URL || 'http://my-airflow-api-server.airflow.svc.cluster.local:8080') + '/api/v2',
-      timeout: parseInt(process.env.AIRFLOW_TIMEOUT || '120000'),
+      baseURL: process.env.AIRFLOW_API_URL || 'http://localhost:8080/api/v1',
+      timeout: parseInt(process.env.AIRFLOW_TIMEOUT || '30000'),
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': 'KOSA-Backend/1.0.0',
       },
     });
 
-    // JWT Bearer Token 설정
+    // Basic Auth 설정 (Airflow 기본 인증)
+    const username = process.env.AIRFLOW_USERNAME || 'admin';
+    const password = process.env.AIRFLOW_PASSWORD || 'admin';
+    
     client.interceptors.request.use(
-      async (config) => {
-        try {
-          // JWT 토큰 가져오기 (자동 갱신 포함)
-          const token = await airflowTokenManager.getValidToken();
-          config.headers.Authorization = `Bearer ${token}`;
-          
-          // Log request (without sensitive data)
-          console.log(`🔄 Airflow Request: ${config.method?.toUpperCase()} ${config.url}`);
-          
-          return config;
-        } catch (error) {
-          console.error('❌ Failed to get Airflow JWT token:', error);
-          Sentry.captureException(error);
-          return Promise.reject(error);
-        }
+      (config) => {
+        // Basic Auth 헤더 추가
+        const auth = Buffer.from(`${username}:${password}`).toString('base64');
+        config.headers.Authorization = `Basic ${auth}`;
+        
+        // Log request (without sensitive data)
+        console.log(`🔄 Airflow Request: ${config.method?.toUpperCase()} ${config.url}`);
+        
+        return config;
       },
       (error) => {
         console.error('❌ Airflow request interceptor error:', error);
@@ -56,7 +52,7 @@ class AirflowClient {
         console.log(`✅ Airflow Response: ${response.status} ${response.config.url}`);
         return response;
       },
-      async (error) => {
+      (error) => {
         const status = error.response?.status;
         const url = error.config?.url;
         
@@ -65,25 +61,6 @@ class AirflowClient {
           status,
           data: error.response?.data,
         });
-
-        // JWT 토큰 만료 시 토큰 무효화 및 재시도
-        if (status === 401) {
-          console.log('🔄 JWT token expired, invalidating and retrying...');
-          airflowTokenManager.invalidateToken();
-          
-          // 원본 요청 재시도 (한 번만)
-          if (!error.config._retry) {
-            error.config._retry = true;
-            try {
-              const newToken = await airflowTokenManager.getValidToken();
-              error.config.headers.Authorization = `Bearer ${newToken}`;
-              return client.request(error.config);
-            } catch (retryError) {
-              console.error('❌ Token refresh retry failed:', retryError);
-              return Promise.reject(retryError);
-            }
-          }
-        }
 
         // Sentry error reporting with context
         Sentry.withScope((scope) => {
@@ -135,7 +112,7 @@ class AirflowClient {
 
   createCircuitBreaker() {
     const options = {
-      timeout: parseInt(process.env.AIRFLOW_CIRCUIT_BREAKER_TIMEOUT || '120000'),
+      timeout: parseInt(process.env.AIRFLOW_CIRCUIT_BREAKER_TIMEOUT || '30000'),
       errorThresholdPercentage: parseInt(process.env.AIRFLOW_CIRCUIT_BREAKER_ERROR_THRESHOLD || '50'),
       resetTimeout: parseInt(process.env.AIRFLOW_CIRCUIT_BREAKER_RESET_TIMEOUT || '60000'),
     };
@@ -183,12 +160,11 @@ class AirflowClient {
    */
   async triggerSingleProductAnalysis(params) {
     try {
-      const dagId = 'crawler_trigger_dag';
+      const dagId = 'single_product_analysis';
       const dagRunId = `single_${params.productId}_${Date.now()}`;
       
       const payload = {
         dag_run_id: dagRunId,
-        logical_date: new Date().toISOString(),
         conf: {
           product_id: params.productId,
           product_url: params.productUrl,
@@ -247,12 +223,11 @@ class AirflowClient {
    */
   async triggerMultiProductAnalysis(params) {
     try {
-      const dagId = 'crawler_trigger_dag';
+      const dagId = 'multi_product_analysis';
       const dagRunId = `multi_${params.searchQuery.replace(/\s+/g, '_')}_${Date.now()}`;
       
       const payload = {
         dag_run_id: dagRunId,
-        logical_date: new Date().toISOString(),
         conf: {
           search_query: params.searchQuery,
           user_id: params.userId,
@@ -310,12 +285,11 @@ class AirflowClient {
    */
   async triggerWatchlistAnalysis(params) {
     try {
-      const dagId = 'crawler_trigger_dag';
+      const dagId = 'watchlist_batch_analysis';
       const dagRunId = `watchlist_${params.userId}_${Date.now()}`;
       
       const payload = {
         dag_run_id: dagRunId,
-        logical_date: new Date().toISOString(),
         conf: {
           user_id: params.userId,
           product_ids: params.productIds,
